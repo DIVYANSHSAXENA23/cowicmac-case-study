@@ -1,0 +1,8 @@
+name: "Traffic_III_Low_Load"
+description: "Sparse WiFi traffic profile with low channel contention"
+avg_fg_duration_ms: 16.0
+avg_whitespace_ms: 34.3
+qos_sensitive_ratio: 0.274
+non_realtime_ratio: 0.492
+avg_delay_bound_ms: 120.7
+postpone_bounds_ms: [50, 100, 150, 200]

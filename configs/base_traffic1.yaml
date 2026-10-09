@@ -1,0 +1,8 @@
+name: "Traffic_I_High_Load"
+description: "Dense WiFi traffic profile with 90 percent channel occupancy"
+avg_fg_duration_ms: 39.2
+avg_whitespace_ms: 5.3
+qos_sensitive_ratio: 0.073
+non_realtime_ratio: 0.849
+avg_delay_bound_ms: 160.6
+postpone_bounds_ms: [50, 100, 150, 200]

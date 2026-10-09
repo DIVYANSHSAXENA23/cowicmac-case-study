@@ -1,0 +1,14 @@
+experiment_id: "Exp_4"
+category: "CoWiC-MAC (Full Proposed)"
+wifi_scheduling: "milp_soft_constraint"
+ctc_direction: "bidirectional"
+zigbee_adaptation: "lwsa"
+sensing_window_ms: 10.0
+d_free_ms: 62.0
+zigbee_period_ms: 1000.0
+duration_s: 60.0
+traffic_profile: "configs/base_traffic1.yaml"
+gamma_sensing_weight: 10.0
+lambda_delay_weight: 1.0
+mu_base_cost: 100.0
+random_seed: 42

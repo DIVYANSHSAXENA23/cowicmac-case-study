@@ -1,0 +1,11 @@
+experiment_id: "Exp_2"
+category: "Baseline (Opportunistic)"
+wifi_scheduling: "gap_search"
+ctc_direction: "wifi_to_zigbee"
+zigbee_adaptation: "fixed"
+sensing_window_ms: 0.0
+d_free_ms: 62.0
+zigbee_period_ms: 1000.0
+duration_s: 60.0
+traffic_profile: "configs/base_traffic1.yaml"
+random_seed: 42
