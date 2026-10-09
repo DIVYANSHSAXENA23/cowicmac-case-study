@@ -51,3 +51,6 @@ ignore_missing_imports = true
 minversion = "8.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cowic"]
