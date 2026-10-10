@@ -1,6 +1,45 @@
-"""Metrics computation for coexistence evaluation."""
+"""Metrics computation for coexistence evaluation (base paper, Section 5.1).
 
+Every metric is computed from simulation ground truth, so it does not depend
+on how a run was driven:
+
+* ``transmissions``: :class:`~cowic.sim.channel_medium.TransmissionRecord`
+  objects from the shared channel (``SimulationEngine.last_medium``), whose
+  ``success`` flags already reflect every collision.
+* ``decisions`` and ``frame_groups``: the WiFi scheduling decisions of every
+  cycle and the FGs they refer to.
+
+Definitions:
+
+* **G_z**: delivered ZigBee payload over the payload a clean medium would
+  deliver. Payload is proportional to airtime, so this is successful ZigBee
+  airtime over ``zigbee_capacity_ms`` (e.g. ``D_free`` per cycle times the
+  number of cycles; see :func:`zigbee_clean_capacity_ms`). Using a fixed
+  clean-medium denominator, not the number of attempts, keeps G_z
+  comparable across experiments that attempt different amounts of traffic.
+* **PDR_w**: WiFi FG airtime discarded by scheduling over all requested FG
+  airtime. An FG is discarded when it is postponed past its deadline: it is
+  reported at the cycle end and cannot finish in time. Collisions are not
+  scheduling drops and are reported separately as ``wifi_collision_rate``.
+* **U_eff**: successful WiFi airtime, successful ZigBee airtime and control
+  (sensing) airtime as a fraction of the simulated horizon.
+* **Delay overhead**: jitter (population standard deviation of the delay of
+  delivered FGs), the number of FGs moved from their original start, and the
+  largest delay of a delivered FG.
+"""
+
+import math
+import statistics
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+
+from cowic.exceptions import ConfigurationError
+from cowic.models.frame_group import FrameGroup, SchedulingDecision
+from cowic.sim.channel_medium import TransmissionRecord
+
+WIFI = "wifi"
+ZIGBEE = "zigbee"
+MOVED_TOLERANCE_MS = 1e-6  # Delays below this are solver round-off, not moves.
 
 
 @dataclass(frozen=True)
@@ -13,13 +52,160 @@ class SimulationMetrics:
     wifi_jitter_ms: float
     moved_fg_count: int
     max_fg_delay_ms: float
+    wifi_collision_rate: float
+
+
+def zigbee_clean_capacity_ms(d_free_ms: float, cycles: int) -> float:
+    """ZigBee airtime a clean medium would carry: ``D_free`` every cycle."""
+    _check_non_negative(d_free_ms=d_free_ms)
+    if cycles < 0:
+        raise ConfigurationError(f"cycles must be non-negative, got {cycles}")
+    return d_free_ms * cycles
+
+
+def zigbee_gain_ratio(
+    transmissions: Iterable[TransmissionRecord], zigbee_capacity_ms: float
+) -> float:
+    """G_z: successful ZigBee airtime over clean-medium capacity, at most 1."""
+    _check_non_negative(zigbee_capacity_ms=zigbee_capacity_ms)
+    delivered = _airtime(transmissions, ZIGBEE, successful_only=True)
+    if zigbee_capacity_ms == 0:
+        return 0.0
+    return min(1.0, delivered / zigbee_capacity_ms)
+
+
+def wifi_drop_rate(
+    decisions: Iterable[SchedulingDecision],
+    frame_groups: Mapping[int, FrameGroup],
+) -> float:
+    """PDR_w: airtime of FGs postponed past their deadline over all FG airtime."""
+    requested = 0.0
+    dropped = 0.0
+    for decision in decisions:
+        fg = frame_groups[decision.fg_id]
+        requested += fg.duration_ms
+        if _is_dropped(decision, fg):
+            dropped += fg.duration_ms
+    return dropped / requested if requested else 0.0
+
+
+def wifi_collision_rate(transmissions: Iterable[TransmissionRecord]) -> float:
+    """Share of transmitted WiFi airtime corrupted by a collision."""
+    records = [r for r in transmissions if r.protocol == WIFI]
+    total = _airtime(records, WIFI, successful_only=False)
+    if not total:
+        return 0.0
+    return 1.0 - _airtime(records, WIFI, successful_only=True) / total
+
+
+def spectrum_utilization(
+    transmissions: Iterable[TransmissionRecord],
+    horizon_ms: float,
+    control_airtime_ms: float = 0.0,
+) -> float:
+    """U_eff: useful airtime (successful WiFi + ZigBee + control) over horizon.
+
+    Airtime outside ``[0, horizon_ms]`` is ignored, and the result is capped
+    at 1 in case the caller's control airtime overlaps data airtime.
+    """
+    if not math.isfinite(horizon_ms) or horizon_ms <= 0:
+        raise ConfigurationError(f"horizon_ms must be positive, got {horizon_ms}")
+    _check_non_negative(control_airtime_ms=control_airtime_ms)
+    useful = control_airtime_ms
+    for record in transmissions:
+        if record.success and record.protocol in (WIFI, ZIGBEE):
+            start = max(record.start_time_ms, 0.0)
+            end = min(record.end_time_ms, horizon_ms)
+            useful += max(0.0, end - start)
+    return min(1.0, useful / horizon_ms)
+
+
+def delay_overhead(
+    decisions: Iterable[SchedulingDecision],
+    frame_groups: Mapping[int, FrameGroup],
+) -> tuple[float, int, float]:
+    """Return ``(jitter_ms, moved_fg_count, max_fg_delay_ms)``.
+
+    Jitter and maximum delay cover delivered FGs only; a dropped FG has no
+    delivery delay. Every FG moved from its original start counts as moved,
+    including postponed ones.
+    """
+    delays: list[float] = []
+    moved = 0
+    for decision in decisions:
+        if decision.delay_ms > MOVED_TOLERANCE_MS:
+            moved += 1
+        if not _is_dropped(decision, frame_groups[decision.fg_id]):
+            delays.append(max(0.0, decision.delay_ms))
+    jitter = statistics.pstdev(delays) if len(delays) > 1 else 0.0
+    return jitter, moved, max(delays, default=0.0)
 
 
 class MetricsCalculator:
     """Calculates throughput, drop rate, utilization, and delay statistics."""
 
-    def compute(self, records: list[dict[str, float]]) -> SimulationMetrics:
-        """Derive standard benchmark metrics from trace records."""
-        raise NotImplementedError(
-            "MetricsCalculator implementation planned for Sprint Day 2"
+    def compute(
+        self,
+        transmissions: Sequence[TransmissionRecord],
+        decisions: Sequence[SchedulingDecision],
+        frame_groups: Mapping[int, FrameGroup] | Iterable[FrameGroup],
+        horizon_ms: float,
+        zigbee_capacity_ms: float,
+        control_airtime_ms: float = 0.0,
+    ) -> SimulationMetrics:
+        """Derive the Section 5.1 metrics for one simulation run.
+
+        Args:
+            transmissions: Final channel records (``ChannelMedium.transmissions``).
+            decisions: WiFi scheduling decisions from every cycle.
+            frame_groups: The FGs those decisions refer to, by id or as a list.
+            horizon_ms: Simulated duration.
+            zigbee_capacity_ms: Clean-medium ZigBee airtime (G_z denominator).
+            control_airtime_ms: Sensing/control airtime counted in U_eff.
+
+        Raises:
+            ConfigurationError: On a non-positive horizon or negative airtime.
+            KeyError: If a decision refers to an unknown FG.
+        """
+        by_id = (
+            dict(frame_groups)
+            if isinstance(frame_groups, Mapping)
+            else {fg.fg_id: fg for fg in frame_groups}
         )
+        jitter, moved, max_delay = delay_overhead(decisions, by_id)
+        return SimulationMetrics(
+            zigbee_gain_ratio=zigbee_gain_ratio(transmissions, zigbee_capacity_ms),
+            wifi_drop_rate=wifi_drop_rate(decisions, by_id),
+            spectrum_utilization=spectrum_utilization(
+                transmissions, horizon_ms, control_airtime_ms
+            ),
+            wifi_jitter_ms=jitter,
+            moved_fg_count=moved,
+            max_fg_delay_ms=max_delay,
+            wifi_collision_rate=wifi_collision_rate(transmissions),
+        )
+
+
+def _is_dropped(decision: SchedulingDecision, fg: FrameGroup) -> bool:
+    return (
+        decision.is_postponed
+        and decision.scheduled_start_ms + fg.duration_ms > fg.deadline_ms
+    )
+
+
+def _airtime(
+    transmissions: Iterable[TransmissionRecord],
+    protocol: str,
+    successful_only: bool,
+) -> float:
+    return sum(
+        r.end_time_ms - r.start_time_ms
+        for r in transmissions
+        if r.protocol == protocol and (r.success or not successful_only)
+    )
+
+
+def _check_non_negative(**values: float) -> None:
+    for name, value in values.items():
+        if not math.isfinite(value) or value < 0:
+            raise ConfigurationError(f"{name} must be finite and >= 0, got {value}")
