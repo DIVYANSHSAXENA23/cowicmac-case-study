@@ -14,6 +14,7 @@ interference-free window. When the request cannot be met in full, the
 sensing window keeps priority because it closes the coordination loop.
 """
 
+import math
 import time
 from collections.abc import Sequence
 
@@ -32,11 +33,26 @@ def fallback_whitespace_expansion(
     t_end_ms: float,
     d_free_ms: float,
     d_sensing_ms: float = 0.0,
+    channel_free_at: float = -math.inf,
 ) -> ScheduleResult:
     """Reserve ``d_sensing_ms + d_free_ms`` by using or extending a whitespace.
 
-    No FG is ever postponed: when the full request would force a
-    postponement, the window is shortened instead.
+    When ``channel_free_at`` is ``-inf`` (no carryover), no FG is ever
+    postponed: when the full request would force a postponement, the
+    window is shortened instead. With carryover active, a FG whose natural
+    position falls before ``channel_free_at`` is deferred past it and *can*
+    be postponed if that deferral alone (independent of the reserved
+    window) would miss its deadline or overflow the cycle - it already
+    cannot transmit where it was originally placed.
+
+    ``channel_free_at``: airtime already occupied before any FG in
+    ``frame_groups`` (e.g. a carried-over FG still transmitting at
+    ``t_start_ms``). A FG naturally positioned before it is deferred to
+    start no earlier than ``channel_free_at``, exactly as it would be if it
+    overlapped the reserved window directly - gap search alone (clipping
+    ``find_whitespaces`` to ``[t_start_ms, t_end_ms]``) is not enough, since
+    an FG positioned *before* an already-raised ``t_start_ms`` is invisible
+    to it rather than correctly pushed later.
     """
     if d_free_ms < 0 or d_sensing_ms < 0:
         raise ConfigurationError(
@@ -57,12 +73,14 @@ def fallback_whitespace_expansion(
         )
         target = min(window_start + need, t_end_ms)
         window_end = _widest_window(
-            frame_groups, window_start, gap_end, target, t_end_ms
+            frame_groups, window_start, gap_end, target, t_end_ms, channel_free_at
         )
 
     sense_end = min(window_start + d_sensing_ms, window_end)
     return ScheduleResult(
-        decisions=defer_around_window(frame_groups, window_start, window_end, t_end_ms),
+        decisions=defer_around_window(
+            frame_groups, window_start, window_end, t_end_ms, channel_free_at
+        ),
         t_free_start_ms=sense_end,
         t_free_end_ms=window_end,
         t_sense_start_ms=window_start,
@@ -78,6 +96,7 @@ def _widest_window(
     safe_end: float,
     target_end: float,
     t_end_ms: float,
+    channel_free_at: float = -math.inf,
 ) -> float:
     """Largest feasible window end in ``[safe_end, target_end]``.
 
@@ -86,11 +105,14 @@ def _widest_window(
     itself now overlap ``safe_end``, forcing a further, otherwise-avoidable
     postponement. If even ``safe_end`` is infeasible, return ``window_start``
     (an empty window) instead, so the fallback never introduces a
-    postponement that would not occur without it.
+    postponement that would not occur without it. See
+    :func:`fallback_whitespace_expansion` for ``channel_free_at``.
     """
 
     def feasible(end: float) -> bool:
-        decisions = defer_around_window(frame_groups, window_start, end, t_end_ms)
+        decisions = defer_around_window(
+            frame_groups, window_start, end, t_end_ms, channel_free_at
+        )
         return not _any_postponed(decisions)
 
     if feasible(target_end):

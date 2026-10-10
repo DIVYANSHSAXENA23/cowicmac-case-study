@@ -179,10 +179,15 @@ class APOrchestrator:
             default=t_start_ms,
         )
         if busy_until >= t_end_ms:
-            schedule, used_fallback = _carryover_busy(frame_groups, t_end_ms), False
+            schedule = _carryover_busy(frame_groups, carryover, t_end_ms)
+            used_fallback = False
         else:
+            channel_free_at = busy_until if carryover else -math.inf
             schedule, used_fallback = self._reschedule(
-                list(frame_groups), max(t_start_ms, busy_until), t_end_ms
+                list(frame_groups),
+                max(t_start_ms, busy_until),
+                t_end_ms,
+                channel_free_at,
             )
 
         self._advance(APState.CTC_NOTIFYING)
@@ -209,7 +214,11 @@ class APOrchestrator:
         self.history.append(target)
 
     def _reschedule(
-        self, frame_groups: list[FrameGroup], t_start_ms: float, t_end_ms: float
+        self,
+        frame_groups: list[FrameGroup],
+        t_start_ms: float,
+        t_end_ms: float,
+        channel_free_at: float = -math.inf,
     ) -> tuple[ScheduleResult, bool]:
         if self.scheduler is not None:
             try:
@@ -226,7 +235,12 @@ class APOrchestrator:
                 if result.solver_status in self.optimal_statuses:
                     return result, False
         fallback = fallback_whitespace_expansion(
-            frame_groups, t_start_ms, t_end_ms, self.demand_ms, self.d_sensing_ms
+            frame_groups,
+            t_start_ms,
+            t_end_ms,
+            self.demand_ms,
+            self.d_sensing_ms,
+            channel_free_at,
         )
         return fallback, True
 
@@ -251,19 +265,40 @@ class APOrchestrator:
 
 
 def _carryover_busy(
-    frame_groups: Sequence[FrameGroup], t_end_ms: float
+    frame_groups: Sequence[FrameGroup],
+    carryover: Sequence[FrameGroup],
+    t_end_ms: float,
 ) -> ScheduleResult:
-    """No airtime is free this cycle: grant no windows and move nothing."""
-    return ScheduleResult(
-        decisions=[
+    """No airtime is free this cycle: postpone FGs that overlap carryover.
+
+    An FG whose natural position does not actually overlap any FG in
+    ``carryover`` genuinely has nowhere to be pushed to anyway (there is no
+    free airtime left this cycle), but it was never in conflict with the
+    carryover either, so it is left unchanged. One that does overlap
+    cannot transmit there and is postponed to the next cycle.
+    """
+    decisions = []
+    for fg in frame_groups:
+        fg_end = fg.original_start_ms + fg.duration_ms
+        overlaps_carryover = any(
+            fg.original_start_ms < c.original_start_ms + c.duration_ms
+            and c.original_start_ms < fg_end
+            for c in carryover
+        )
+        decisions.append(
             SchedulingDecision(
                 fg_id=fg.fg_id,
-                scheduled_start_ms=fg.original_start_ms,
-                is_postponed=False,
-                delay_ms=0.0,
+                scheduled_start_ms=t_end_ms
+                if overlaps_carryover
+                else fg.original_start_ms,
+                is_postponed=overlaps_carryover,
+                delay_ms=(t_end_ms - fg.original_start_ms)
+                if overlaps_carryover
+                else 0.0,
             )
-            for fg in frame_groups
-        ],
+        )
+    return ScheduleResult(
+        decisions=decisions,
         t_free_start_ms=t_end_ms,
         t_free_end_ms=t_end_ms,
         t_sense_start_ms=t_end_ms,

@@ -257,6 +257,9 @@ def test_finished_carryover_does_not_shift_horizon() -> None:
 
 
 def test_carryover_filling_cycle_grants_no_window() -> None:
+    # FG 1 ([10, 20]) is entirely swallowed by carryover FG 9's span
+    # ([-10, 140]): it cannot transmit this cycle and must be postponed,
+    # not silently reported as transmitted unchanged.
     scheduler = FakeScheduler()
     ap = APOrchestrator(FakeCTC(), scheduler)
     outcome = ap.process_cycle(
@@ -266,8 +269,27 @@ def test_carryover_filling_cycle_grants_no_window() -> None:
     assert not outcome.used_fallback
     assert outcome.schedule.solver_status == CARRYOVER_BUSY_STATUS
     assert outcome.schedule.t_free_start_ms == outcome.schedule.t_free_end_ms
-    assert [d.delay_ms for d in outcome.schedule.decisions] == [0.0]
+    (decision,) = outcome.schedule.decisions
+    assert decision.is_postponed is True
+    assert decision.scheduled_start_ms == 100.0
+    assert decision.delay_ms == 90.0
     assert ap.state is APState.MAINTAINING
+
+
+def test_carryover_filling_cycle_leaves_non_overlapping_fg_untouched() -> None:
+    # FG 1 ([10, 20]) does not overlap a carryover FG confined to [60, 160):
+    # even though carryover fills the cycle to its end, FG 1's own slot was
+    # never in conflict with it and its decision stays unchanged.
+    scheduler = FakeScheduler()
+    ap = APOrchestrator(FakeCTC(), scheduler)
+    outcome = ap.process_cycle(
+        FGS, 0.0, 100.0, _zbeacon(30.0), carryover=[_fg(9, 60.0, 100.0)]
+    )
+    assert outcome.schedule.solver_status == CARRYOVER_BUSY_STATUS
+    (decision,) = outcome.schedule.decisions
+    assert decision.is_postponed is False
+    assert decision.scheduled_start_ms == 10.0
+    assert decision.delay_ms == 0.0
 
 
 @pytest.mark.parametrize("profile", ["Traffic_I", "Traffic_II"])
