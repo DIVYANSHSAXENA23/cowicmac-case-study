@@ -128,6 +128,8 @@ class TrafficProfile:
             raw = yaml.safe_load(path.read_text())
         except OSError as exc:
             raise ConfigurationError(f"Cannot read traffic profile {path}") from exc
+        except yaml.YAMLError as exc:
+            raise ConfigurationError(f"{path}: malformed YAML") from exc
         try:
             bounds = tuple(float(b) for b in raw["postpone_bounds_ms"])
             if len(bounds) != 4:

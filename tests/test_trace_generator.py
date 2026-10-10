@@ -133,6 +133,10 @@ def test_profile_yaml_errors(tmp_path: Path) -> None:
     bad.write_text("name: x\npostpone_bounds_ms: [50, 100]\n")
     with pytest.raises(ConfigurationError):
         load_profile(str(bad))
+    malformed = tmp_path / "malformed.yaml"
+    malformed.write_text("name: x\npostpone_bounds_ms: [50, 100, 150, 200\n")
+    with pytest.raises(ConfigurationError):
+        load_profile(str(malformed))
 
 
 def test_generate_and_load_round_trip(tmp_path: Path) -> None:
@@ -183,6 +187,9 @@ def _row(**overrides: object) -> dict[str, object]:
         [_row(duration_ms=0.0)],
         [_row(arrival_time_ms=1.0)],
         [_row(deadline_ms=2.0)],
+        [_row(deadline_ms=float("nan"))],
+        [_row(original_start_ms=float("nan"))],
+        [_row(duration_ms=float("inf"))],
     ],
 )
 def test_malformed_trace_rejected(rows: list[dict[str, object]]) -> None:
@@ -218,6 +225,51 @@ def test_iter_cycles_empty_and_horizon() -> None:
     assert [c.start_ms for c in cycles] == [0.0, 100.0, 200.0]
     with pytest.raises(ConfigurationError):
         list(iter_cycles([], cycle_ms=0.0))
+
+
+def test_iter_cycles_active_carryover_crosses_boundary() -> None:
+    # FG 1 starts in cycle 0 ([0, 100)) but runs until 110, into cycle 1.
+    straddling = FrameGroup(
+        fg_id=1,
+        arrival_time_ms=0.0,
+        duration_ms=15.0,
+        deadline_ms=200.0,
+        original_start_ms=95.0,
+        qos_sensitive=False,
+    )
+    inside_next = FrameGroup(
+        fg_id=2,
+        arrival_time_ms=100.0,
+        duration_ms=5.0,
+        deadline_ms=200.0,
+        original_start_ms=120.0,
+        qos_sensitive=False,
+    )
+    cycles = list(
+        iter_cycles([straddling, inside_next], cycle_ms=100.0, horizon_ms=201.0)
+    )
+
+    assert cycles[0].active_carryover == ()
+    assert cycles[0].frame_groups == (straddling,)
+    # FG 1 is owned by cycle 0 but still active at cycle 1's start (100 < 110).
+    assert cycles[1].active_carryover == (straddling,)
+    assert cycles[1].frame_groups == (inside_next,)
+    # By cycle 2 (start 200), FG 1 (ends 110) is no longer active.
+    assert cycles[2].active_carryover == ()
+
+
+def test_iter_cycles_carryover_spans_multiple_cycles() -> None:
+    # A 250ms FG starting at 10 is still active through cycles 1, 2, and 3.
+    long_fg = FrameGroup(
+        fg_id=1,
+        arrival_time_ms=0.0,
+        duration_ms=250.0,
+        deadline_ms=400.0,
+        original_start_ms=10.0,
+        qos_sensitive=False,
+    )
+    cycles = list(iter_cycles([long_fg], cycle_ms=100.0, horizon_ms=400.0))
+    assert [c.active_carryover for c in cycles] == [(), (long_fg,), (long_fg,), ()]
 
 
 def test_cli_writes_trace(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

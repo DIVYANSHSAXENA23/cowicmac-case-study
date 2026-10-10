@@ -5,6 +5,7 @@ A trace written by :mod:`traces.synthetic_generator` is loaded as immutable
 fixed-length AP scheduling cycles.
 """
 
+import math
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,12 +27,23 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class TraceCycle:
-    """Frame Groups whose original start falls in ``[start_ms, end_ms)``."""
+    """One scheduling cycle's Frame Groups.
+
+    ``frame_groups`` holds the FGs whose original start falls in
+    ``[start_ms, end_ms)`` (each FG belongs to exactly one cycle this way).
+    ``active_carryover`` holds FGs owned by an *earlier* cycle whose
+    transmission (``original_start_ms + duration_ms``) is still active at
+    ``start_ms``. Gap/whitespace detection (e.g.
+    :func:`cowic.wifi.baselines.find_whitespaces`) must consider both:
+    a scheduler given only ``frame_groups`` would treat a carried-over FG's
+    tail as idle airtime and could announce a ZigBee window over it.
+    """
 
     index: int
     start_ms: float
     end_ms: float
     frame_groups: tuple[FrameGroup, ...]
+    active_carryover: tuple[FrameGroup, ...]
 
 
 def frame_groups_from_frame(trace: pd.DataFrame) -> list[FrameGroup]:
@@ -80,9 +92,11 @@ def iter_cycles(
     """Yield consecutive scheduling cycles of length ``cycle_ms``.
 
     Each FG belongs to the cycle containing its original start, even if it
-    runs past the cycle boundary. Empty cycles are yielded too, so cycle
-    indices map directly to time. ``horizon_ms`` defaults to the end of the
-    last FG.
+    runs past the cycle boundary; ``TraceCycle.active_carryover`` surfaces
+    such straddling FGs owned by earlier cycles so gap-detection callers
+    don't mistake their tail for idle airtime. Empty cycles are yielded
+    too, so cycle indices map directly to time. ``horizon_ms`` defaults to
+    the end of the last FG.
     """
     if cycle_ms <= 0:
         raise ConfigurationError(f"cycle_ms must be positive, got {cycle_ms}")
@@ -95,18 +109,30 @@ def iter_cycles(
     pos = 0
     index = 0
     start = 0.0
+    active: list[FrameGroup] = []
     while start < horizon_ms:
         end = start + cycle_ms
+        carryover = tuple(
+            fg for fg in active if fg.original_start_ms + fg.duration_ms > start
+        )
         members: list[FrameGroup] = []
         while pos < len(ordered) and ordered[pos].original_start_ms < end:
             members.append(ordered[pos])
             pos += 1
-        yield TraceCycle(index, start, end, tuple(members))
+        yield TraceCycle(index, start, end, tuple(members), carryover)
+        active = [
+            fg
+            for fg in (*carryover, *members)
+            if fg.original_start_ms + fg.duration_ms > end
+        ]
         index += 1
         start = end
 
 
 def _validate(fg: FrameGroup) -> None:
+    values = (fg.arrival_time_ms, fg.duration_ms, fg.deadline_ms, fg.original_start_ms)
+    if not all(math.isfinite(v) for v in values):
+        raise TraceError(f"FG {fg.fg_id}: timing fields must be finite")
     if fg.duration_ms <= 0:
         raise TraceError(f"FG {fg.fg_id}: duration must be positive")
     if fg.arrival_time_ms > fg.original_start_ms:
