@@ -273,3 +273,85 @@ def test_simulation_engine_applies_ctc_delay_as_simulated_time(
     fast_result = SimulationEngine(negligible_delay).run()
     slow_result = SimulationEngine(heavy_delay).run()
     assert slow_result["cycles_run"] < fast_result["cycles_run"]
+def _fixed_baseline_config(
+    trace: Path, wifi_scheduling: str, ctc_direction: str, **overrides: float
+) -> SimulationConfig:
+    return SimulationConfig(
+        scenario_name=f"Test_{wifi_scheduling}",
+        duration_s=3.0,
+        wifi_trace_path=trace,
+        d_free_ms=62.0,
+        d_sensing_ms=0.0,
+        zigbee_period_ms=1000.0,
+        wifi_scheduling=wifi_scheduling,
+        ctc_direction=ctc_direction,
+        zigbee_adaptation="fixed",
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
+def _first_zigbee_start_per_cycle(engine: SimulationEngine) -> list[float]:
+    assert engine.last_medium is not None
+    starts: dict[int, float] = {}
+    for record in engine.last_medium.transmissions:
+        if record.protocol == "zigbee":
+            cycle = int(record.start_time_ms // 1000.0)
+            starts[cycle] = min(
+                starts.get(cycle, record.start_time_ms), record.start_time_ms
+            )
+    return [starts[c] - c * 1000.0 for c in sorted(starts)]
+
+
+def test_exp2_fixed_superframe_follows_announced_gap(short_trace: Path) -> None:
+    """Exp 2 notifies ZigBee of the largest gap: the fixed superframe must
+    start there, not at the cycle start, so Exp 2 differs from Exp 1."""
+    exp1 = SimulationEngine(_fixed_baseline_config(short_trace, "none", "none"))
+    exp2 = SimulationEngine(
+        _fixed_baseline_config(short_trace, "gap_search", "wifi_to_zigbee")
+    )
+    r1, r2 = exp1.run(), exp2.run()
+
+    beacon_slot = 0.96 * 4
+    assert all(
+        start == pytest.approx(beacon_slot)
+        for start in _first_zigbee_start_per_cycle(exp1)
+    )
+    assert any(
+        start > beacon_slot + 1e-6 for start in _first_zigbee_start_per_cycle(exp2)
+    )
+    assert r2["zigbee_success_count"] > r1["zigbee_success_count"]
+
+
+def test_fixed_superframe_without_wbeacon_stays_at_cycle_start(
+    short_trace: Path,
+) -> None:
+    """If the WBeacon never arrives, ZigBee has no window to follow."""
+    lost = SimulationEngine(
+        _fixed_baseline_config(
+            short_trace, "gap_search", "wifi_to_zigbee", ctc_per=1.0, ctc_max_retries=0
+        )
+    )
+    lost.run()
+    assert all(
+        start == pytest.approx(0.96 * 4)
+        for start in _first_zigbee_start_per_cycle(lost)
+    )
+
+
+def test_exp6_without_zbeacon_still_serves_zigbee(short_trace: Path) -> None:
+    """Exp 6 (MILP + L-WSA, WiFi->ZigBee CTC only) has no ZBeacon, so the AP
+    must use the configured D_free instead of granting empty windows."""
+    config = SimulationConfig(
+        scenario_name="Test_Exp6",
+        duration_s=3.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=0.0,
+        zigbee_period_ms=1000.0,
+        wifi_scheduling="milp_soft_constraint",
+        ctc_direction="wifi_to_zigbee",
+        zigbee_adaptation="lwsa",
+    )
+    result = SimulationEngine(config).run()
+    assert result["zigbee_packets_attempted"] > 0
+    assert result["zigbee_success_rate"] > 0.9
