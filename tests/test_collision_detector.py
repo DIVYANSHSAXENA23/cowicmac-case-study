@@ -1,8 +1,10 @@
 """Unit tests for shared channel collision detection."""
 
+import math
+
 import pytest
 
-from cowic.sim.channel_medium import ChannelMedium
+from cowic.sim.channel_medium import OVERLAP_TOLERANCE_MS, ChannelMedium
 
 
 def test_channel_medium_instantiation() -> None:
@@ -114,3 +116,54 @@ def test_reset_clears_transmission_log() -> None:
     # A previously used trans_id can be reused after reset.
     record = medium.register_transmission("A", "WiFi", start_ms=0.0, duration_ms=1.0)
     assert record.success is True
+
+
+def test_record_reflects_later_collisions() -> None:
+    """record() returns the current outcome, unlike the returned snapshot."""
+    medium = ChannelMedium()
+    snapshot = medium.register_transmission("WIFI_1", "WiFi", 0.0, 10.0)
+    medium.register_transmission("ZB_1", "ZigBee", 5.0, 2.0)
+    assert snapshot.success is True
+    assert medium.record("WIFI_1").success is False
+    assert medium.record("ZB_1").success is False
+
+
+def test_record_unknown_id_raises() -> None:
+    medium = ChannelMedium()
+    with pytest.raises(KeyError):
+        medium.record("missing")
+    medium.register_transmission("A", "WiFi", 0.0, 1.0)
+    medium.reset()
+    with pytest.raises(KeyError):
+        medium.record("A")
+
+
+@pytest.mark.parametrize(
+    ("start_ms", "duration_ms"),
+    [(0.0, math.nan), (math.nan, 5.0), (0.0, math.inf), (-math.inf, 5.0)],
+)
+def test_register_transmission_rejects_non_finite(
+    start_ms: float, duration_ms: float
+) -> None:
+    """NaN/inf would otherwise never collide and silently report success."""
+    medium = ChannelMedium()
+    with pytest.raises(ValueError):
+        medium.register_transmission("X", "WiFi", start_ms, duration_ms)
+    assert medium.transmissions == []
+
+
+def test_round_off_overlap_is_not_a_collision() -> None:
+    """A sub-tolerance overlap (MILP round-off) counts as touching."""
+    medium = ChannelMedium()
+    # 0.00096 ms is the largest round-off overlap seen from the MILP (#16).
+    medium.register_transmission("FG", "WiFi", 0.0, 10.0 + 0.00096)
+    zb = medium.register_transmission("ZB", "ZigBee", 10.0, 5.0)
+    assert zb.success is True
+    assert medium.record("FG").success is True
+
+
+def test_overlap_just_above_tolerance_collides() -> None:
+    medium = ChannelMedium()
+    medium.register_transmission("FG", "WiFi", 0.0, 10.0 + 2 * OVERLAP_TOLERANCE_MS)
+    zb = medium.register_transmission("ZB", "ZigBee", 10.0, 5.0)
+    assert zb.success is False

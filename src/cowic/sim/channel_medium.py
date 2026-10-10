@@ -12,9 +12,25 @@ previously stored transmission that overlaps it is flipped from success to
 failure, and the new transmission itself is recorded as failed. A
 transmission that collided with an already-failed transmission remains
 failed; it is never flipped back to success.
+
+Because collisions are retroactive, the record returned by
+:meth:`ChannelMedium.register_transmission` is a snapshot taken at
+registration time. Read final outcomes with :meth:`ChannelMedium.record`,
+:meth:`ChannelMedium.successful_transmissions` or
+:meth:`ChannelMedium.failed_transmissions` once all bursts are registered.
+
+Overlaps shorter than ``OVERLAP_TOLERANCE_MS`` are ignored, so solver
+round-off (e.g. a MILP placing an FG end a fraction of a microsecond past a
+window start) is not reported as a collision.
 """
 
+import math
 from dataclasses import dataclass, replace
+
+# Overlaps up to 1 us are treated as touching. CBC round-off reaches ~1 us
+# (seen on Traffic I), while one IEEE 802.15.4 symbol lasts 16 us, so no
+# physically meaningful collision is hidden.
+OVERLAP_TOLERANCE_MS = 1e-3
 
 
 @dataclass(frozen=True)
@@ -31,8 +47,14 @@ class TransmissionRecord:
 def _intervals_overlap(
     start_a: float, end_a: float, start_b: float, end_b: float
 ) -> bool:
-    """Return True if two half-open intervals ``[start, end)`` overlap."""
-    return start_a < end_b and start_b < end_a
+    """Return True if two half-open intervals ``[start, end)`` overlap.
+
+    Overlaps no longer than ``OVERLAP_TOLERANCE_MS`` count as touching.
+    """
+    return (
+        start_a < end_b - OVERLAP_TOLERANCE_MS
+        and start_b < end_a - OVERLAP_TOLERANCE_MS
+    )
 
 
 class ChannelMedium:
@@ -47,7 +69,7 @@ class ChannelMedium:
 
     def __init__(self) -> None:
         self.transmissions: list[TransmissionRecord] = []
-        self._ids_seen: set[str] = set()
+        self._index_by_id: dict[str, int] = {}
 
     def register_transmission(
         self,
@@ -58,17 +80,25 @@ class ChannelMedium:
     ) -> TransmissionRecord:
         """Register a packet burst and evaluate its collision state.
 
-        Returns the newly created :class:`TransmissionRecord`. Any
-        previously registered transmission that overlaps this burst in time
-        is retroactively marked as failed in ``self.transmissions``.
+        Returns a snapshot of the new :class:`TransmissionRecord` as of
+        registration. Any previously registered transmission that overlaps
+        this burst is retroactively marked as failed in ``self.transmissions``,
+        so a later burst can also flip this one; use :meth:`record` for the
+        current outcome.
 
         Raises:
-            ValueError: if ``duration_ms`` is not positive, or ``trans_id``
-                was already registered.
+            ValueError: if ``start_ms`` or ``duration_ms`` is not finite,
+                ``duration_ms`` is not positive, or ``trans_id`` was already
+                registered.
         """
+        if not (math.isfinite(start_ms) and math.isfinite(duration_ms)):
+            raise ValueError(
+                f"start_ms and duration_ms must be finite, got "
+                f"{start_ms} and {duration_ms}"
+            )
         if duration_ms <= 0:
             raise ValueError(f"duration_ms must be positive, got {duration_ms}")
-        if trans_id in self._ids_seen:
+        if trans_id in self._index_by_id:
             raise ValueError(f"trans_id {trans_id!r} already registered")
 
         end_ms = start_ms + duration_ms
@@ -88,9 +118,17 @@ class ChannelMedium:
             end_time_ms=end_ms,
             success=not collided,
         )
+        self._index_by_id[trans_id] = len(self.transmissions)
         self.transmissions.append(record)
-        self._ids_seen.add(trans_id)
         return record
+
+    def record(self, trans_id: str) -> TransmissionRecord:
+        """Return the current record for ``trans_id``, including later flips.
+
+        Raises:
+            KeyError: if ``trans_id`` was never registered.
+        """
+        return self.transmissions[self._index_by_id[trans_id]]
 
     def successful_transmissions(self) -> list[TransmissionRecord]:
         """Return all collision-free transmissions registered so far."""
@@ -103,4 +141,4 @@ class ChannelMedium:
     def reset(self) -> None:
         """Clear all registered transmissions, for reuse across scenarios."""
         self.transmissions.clear()
-        self._ids_seen.clear()
+        self._index_by_id.clear()
