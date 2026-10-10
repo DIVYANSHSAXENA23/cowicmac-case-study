@@ -1,8 +1,40 @@
-"""MILP scheduler for WiFi Frame Groups."""
+"""MILP scheduler for WiFi Frame Groups (Eq. 11-17, Appendix A of the base paper).
 
+The AP selects a new start time ``s'_k`` for each Frame Group (FG) and the
+placement of the ZigBee interference-free window ``[T_free_start,
+T_free_end]`` and the cross-technology sensing window ``[T_sense_start,
+T_sense_end]`` inside the scheduling horizon ``[t_start_ms, t_end_ms]``. The
+objective trades off four costs: WiFi airtime left inside the free window,
+WiFi airtime inside the (strictly protected) sensing window, scheduling
+deviation from the FG's original start time, and a deadline-aware penalty
+for postponing a FG to the next cycle.
+
+This module follows the *linearized* MILP from Appendix A (Big-M method),
+not the non-linear indicator formulation in Section 4.3: Eq. 11
+(objective), Eq. 12 (delay), Eq. 13 (window placement), Eq. 14
+(causality/QoS/postponement), Eq. 15 (inter-FG conflict avoidance), Eq. 17
+(sensing window protection, hard constraint). The overlap-avoidance
+constraints (Eq. 16 in the appendix) are reformulated here with an
+explicit disjunctive ordering binary per FG/window pair, rather than
+transcribed literally: see the inline comment at the overlap constraints
+below for the derivation and why the literal one-directional Big-M text
+extracted from the source PDF is not usable as-is.
+"""
+
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import combinations
 
+import pulp
+
+from cowic.exceptions import ConfigurationError
 from cowic.models.frame_group import FrameGroup, SchedulingDecision
+
+# Numerical floor for the postponement-cost denominator (Eq. 2), matching
+# the paper's epsilon: prevents division by zero / a negative denominator
+# for FGs whose deadline has already effectively passed by t_end_ms.
+EPSILON_MS = 1e-3
 
 
 @dataclass(frozen=True)
@@ -18,18 +50,67 @@ class ScheduleResult:
     solve_time_ms: float
 
 
+def _big_m(
+    frame_groups: Sequence[FrameGroup],
+    horizon_ms: float,
+    d_free_ms: float,
+    d_sensing_ms: float,
+    t_start_ms: float,
+    t_end_ms: float,
+) -> float:
+    """A constraint-loosening constant larger than any feasible time gap.
+
+    ``horizon_ms`` alone is not enough: Eq. 14's postponement-feasibility
+    constraints compare each FG's absolute ``deadline_ms``/``arrival_time_ms``
+    against ``t_start_ms``/``t_end_ms``. A single "stale" FG (e.g. a
+    carryover whose deadline sits well before this cycle) can otherwise
+    make its own relaxed-by-M constraint still bind, forcing infeasibility
+    for the whole model rather than just that one FG.
+    """
+    max_duration = max((fg.duration_ms for fg in frame_groups), default=0.0)
+    deadline_gap = max((t_end_ms - fg.deadline_ms for fg in frame_groups), default=0.0)
+    arrival_gap = max(
+        (fg.arrival_time_ms - t_start_ms for fg in frame_groups), default=0.0
+    )
+    stale_extra = max(0.0, deadline_gap, arrival_gap)
+    return horizon_ms + max_duration + max(d_free_ms, d_sensing_ms) + stale_extra + 1.0
+
+
+def _postponement_cost(fg: FrameGroup, t_end_ms: float, mu_base: float) -> float:
+    """Dynamic postponement cost mu_k from Eq. 2: higher for urgent FGs."""
+    slack = fg.deadline_ms - (t_end_ms + fg.duration_ms)
+    return mu_base / max(EPSILON_MS, slack)
+
+
 class MILPScheduler:
-    """Solves the Frame Group rescheduling problem via PuLP."""
+    """Solves the Frame Group rescheduling problem via PuLP.
+
+    Args:
+        gamma: Penalty weight for WiFi airtime overlapping the sensing
+            window (Eq. 11, term 2).
+        lambda_weight: Penalty weight for scheduling deviation from each
+            FG's original start time (Eq. 11, term 3).
+        mu_base: Base postponement cost scaled by urgency per Eq. 2.
+        solver: A configured ``pulp.LpSolver`` instance. Defaults to the
+            CBC solver bundled with PuLP (``PULP_CBC_CMD``); pass a
+            ``pulp.HiGHS_CMD()`` or similar to use a different backend.
+        time_limit_s: Wall-clock solver time limit, forwarded to the
+            default CBC solver. Ignored if a custom ``solver`` is supplied.
+    """
 
     def __init__(
         self,
         gamma: float = 10.0,
         lambda_weight: float = 1.0,
         mu_base: float = 100.0,
+        solver: pulp.LpSolver | None = None,
+        time_limit_s: float | None = 10.0,
     ) -> None:
         self.gamma = gamma
         self.lambda_weight = lambda_weight
         self.mu_base = mu_base
+        self.solver = solver
+        self.time_limit_s = time_limit_s
 
     def schedule(
         self,
@@ -39,7 +120,279 @@ class MILPScheduler:
         t_start_ms: float,
         t_end_ms: float,
     ) -> ScheduleResult:
-        """Formulate and solve the MILP program."""
-        raise NotImplementedError(
-            "MILPScheduler implementation planned for Sprint Day 1"
+        """Formulate and solve the MILP program for one scheduling cycle.
+
+        Raises:
+            ConfigurationError: if the scheduling horizon or window
+                durations are invalid (``t_end_ms <= t_start_ms``, or a
+                negative duration).
+        """
+        if t_end_ms <= t_start_ms:
+            raise ConfigurationError(
+                f"t_end_ms ({t_end_ms}) must be greater than t_start_ms ({t_start_ms})"
+            )
+        if d_free_ms < 0 or d_sensing_ms < 0:
+            raise ConfigurationError("d_free_ms and d_sensing_ms must be non-negative")
+
+        began = time.perf_counter()
+
+        if not frame_groups:
+            return self._trivial_result(
+                d_free_ms, d_sensing_ms, t_start_ms, t_end_ms, began
+            )
+
+        horizon_ms = t_end_ms - t_start_ms
+        big_m = _big_m(
+            frame_groups, horizon_ms, d_free_ms, d_sensing_ms, t_start_ms, t_end_ms
+        )
+
+        prob = pulp.LpProblem("WiFi_FG_Rescheduling", pulp.LpMinimize)
+
+        s_prime = {
+            fg.fg_id: pulp.LpVariable(
+                f"s_prime_{fg.fg_id}", lowBound=t_start_ms, upBound=t_end_ms
+            )
+            for fg in frame_groups
+        }
+        y = {
+            fg.fg_id: pulp.LpVariable(f"y_{fg.fg_id}", lowBound=0)
+            for fg in frame_groups
+        }
+        p = {
+            fg.fg_id: pulp.LpVariable(f"P_{fg.fg_id}", cat="Binary")
+            for fg in frame_groups
+        }
+        z_free = {
+            fg.fg_id: pulp.LpVariable(f"z_free_{fg.fg_id}", cat="Binary")
+            for fg in frame_groups
+        }
+        z_sense = {
+            fg.fg_id: pulp.LpVariable(f"z_sense_{fg.fg_id}", cat="Binary")
+            for fg in frame_groups
+        }
+        # Side-selector binaries for the disjunctive overlap-avoidance
+        # constraints below: w=0 means "FG scheduled entirely before the
+        # window", w=1 means "FG scheduled entirely after the window". Only
+        # meaningful when the corresponding z is 0 (overlap not permitted).
+        w_free = {
+            fg.fg_id: pulp.LpVariable(f"w_free_{fg.fg_id}", cat="Binary")
+            for fg in frame_groups
+        }
+        w_sense = {
+            fg.fg_id: pulp.LpVariable(f"w_sense_{fg.fg_id}", cat="Binary")
+            for fg in frame_groups
+        }
+        b_order = {
+            (a.fg_id, b.fg_id): pulp.LpVariable(f"b_{a.fg_id}_{b.fg_id}", cat="Binary")
+            for a, b in combinations(frame_groups, 2)
+        }
+        b_ws = pulp.LpVariable("b_ws", cat="Binary")
+
+        t_free_start = pulp.LpVariable(
+            "T_free_start", lowBound=t_start_ms, upBound=t_end_ms
+        )
+        t_sense_start = pulp.LpVariable(
+            "T_sense_start", lowBound=t_start_ms, upBound=t_end_ms
+        )
+        t_free_end = t_free_start + d_free_ms
+        t_sense_end = t_sense_start + d_sensing_ms
+
+        mu = {
+            fg.fg_id: _postponement_cost(fg, t_end_ms, self.mu_base)
+            for fg in frame_groups
+        }
+        prob += (
+            pulp.lpSum(z_free[fg.fg_id] * fg.duration_ms for fg in frame_groups)
+            + self.gamma
+            * pulp.lpSum(z_sense[fg.fg_id] * fg.duration_ms for fg in frame_groups)
+            + self.lambda_weight * pulp.lpSum(y.values())
+            + pulp.lpSum(mu[fg.fg_id] * p[fg.fg_id] for fg in frame_groups)
+        )
+
+        # Window timing constraints (Eq. 13): free and sensing windows must
+        # never overlap each other. b_ws picks which one comes first.
+        prob += t_free_end <= t_end_ms
+        prob += t_sense_end <= t_end_ms
+        prob += t_free_end <= t_sense_start + big_m * (1 - b_ws)
+        prob += t_sense_end <= t_free_start + big_m * b_ws
+
+        for fg in frame_groups:
+            fid = fg.fg_id
+            s = s_prime[fid]
+            d = fg.duration_ms
+
+            # Delay definition (Eq. 12): y_k >= s'_k - s_k, y_k >= 0.
+            prob += y[fid] >= s - fg.original_start_ms
+
+            # Causality / QoS / postponement feasibility (Eq. 14).
+            prob += fg.arrival_time_ms <= s + big_m * p[fid]
+            prob += s + d <= fg.deadline_ms + big_m * p[fid]
+            prob += t_end_ms + d <= fg.deadline_ms + big_m * (1 - p[fid])
+            prob += s + d <= t_end_ms + big_m * p[fid]
+
+            # Overlap avoidance (Eq. 16/17 intent, corrected disjunctive
+            # Big-M encoding). The paper's Appendix A text, as extracted
+            # from the source PDF, gives one-directional inequalities
+            # (s'_k - T_end <= M*z, T_start - (s'_k+d_k) <= M*z) that,
+            # worked through algebraically, force z=1 whenever the FG does
+            # NOT overlap the window and permit z=0 under overlap - the
+            # opposite of the stated intent ("z indicates overlap duration
+            # to minimize") and incompatible with the hard sensing
+            # constraint sum(z_sense) == 0 (it would force every FG away
+            # from, not into avoiding, the sensing window). This is most
+            # likely a PDF-extraction artifact (the appendix math is badly
+            # garbled in the source). We instead use the same disjunctive
+            # ordering pattern already used for Eq. 13 and Eq. 15 above:
+            # when z=0, the FG must lie entirely before OR entirely after
+            # the window (selected by w); when z=1, both constraints relax
+            # and the FG may overlap at the cost of z*d_k in the objective.
+            prob += s + d <= t_free_start + big_m * (w_free[fid] + z_free[fid])
+            prob += s >= t_free_end - big_m * ((1 - w_free[fid]) + z_free[fid])
+            prob += s + d <= t_sense_start + big_m * (w_sense[fid] + z_sense[fid])
+            prob += s >= t_sense_end - big_m * ((1 - w_sense[fid]) + z_sense[fid])
+
+        # Sensing window protection (Eq. 17): hard constraint, no exceptions.
+        # Combined with the disjunction above, z_sense forced to 0 means
+        # every FG is genuinely, unconditionally clear of the sensing window.
+        prob += pulp.lpSum(z_sense.values()) == 0
+
+        # Inter-FG conflict avoidance (Eq. 15): only applies to FGs that are
+        # both scheduled this cycle (postponed FGs are exempt via P_k, P_j).
+        for a, b in combinations(frame_groups, 2):
+            b_var = b_order[(a.fg_id, b.fg_id)]
+            sa, sb = s_prime[a.fg_id], s_prime[b.fg_id]
+            pa, pb = p[a.fg_id], p[b.fg_id]
+            prob += sa + a.duration_ms <= sb + big_m * (1 - b_var + pa + pb)
+            prob += sb + b.duration_ms <= sa + big_m * (b_var + pa + pb)
+
+        solver = self.solver or pulp.PULP_CBC_CMD(
+            msg=False, timeLimit=self.time_limit_s
+        )
+        prob.solve(solver)
+        status = pulp.LpStatus[prob.status]
+
+        if status != "Optimal":
+            # .value() can be None for every variable here (Infeasible, or
+            # CBC hit time_limit_s before finding a solution: "Not Solved").
+            # Silently falling back to each FG's original_start_ms and a
+            # window collapsed to t_start_ms would look like a normal,
+            # successful result and could overlap the sensing window,
+            # breaking the hard Eq. 17 guarantee for a caller that doesn't
+            # check solver_status. Claim nothing instead: every FG is
+            # postponed and no window is reserved.
+            return self._no_solution_result(
+                frame_groups, t_start_ms, t_end_ms, status, began
+            )
+
+        free_start_val = t_free_start.value()
+        sense_start_val = t_sense_start.value()
+        resolved_free_start = (
+            free_start_val if free_start_val is not None else t_start_ms
+        )
+        resolved_sense_start = (
+            sense_start_val if sense_start_val is not None else t_start_ms
+        )
+
+        decisions = [
+            self._decision_from_solution(fg, s_prime[fg.fg_id], p[fg.fg_id], t_end_ms)
+            for fg in frame_groups
+        ]
+
+        return ScheduleResult(
+            decisions=decisions,
+            t_free_start_ms=resolved_free_start,
+            t_free_end_ms=resolved_free_start + d_free_ms,
+            t_sense_start_ms=resolved_sense_start,
+            t_sense_end_ms=resolved_sense_start + d_sensing_ms,
+            solver_status=status,
+            solve_time_ms=(time.perf_counter() - began) * 1000.0,
+        )
+
+    @staticmethod
+    def _no_solution_result(
+        frame_groups: list[FrameGroup],
+        t_start_ms: float,
+        t_end_ms: float,
+        status: str,
+        began: float,
+    ) -> ScheduleResult:
+        """Safe result when the solver found no usable solution.
+
+        Every FG is reported postponed (never silently kept at its
+        original, possibly sensing-window-violating position) and no
+        window is reserved, so a caller that doesn't check
+        ``solver_status`` still can't send WiFi traffic into a window that
+        was never actually solved for.
+        """
+        decisions = [
+            SchedulingDecision(
+                fg_id=fg.fg_id,
+                scheduled_start_ms=t_end_ms,
+                is_postponed=True,
+                delay_ms=max(0.0, t_end_ms - fg.original_start_ms),
+            )
+            for fg in frame_groups
+        ]
+        return ScheduleResult(
+            decisions=decisions,
+            t_free_start_ms=t_start_ms,
+            t_free_end_ms=t_start_ms,
+            t_sense_start_ms=t_start_ms,
+            t_sense_end_ms=t_start_ms,
+            solver_status=status,
+            solve_time_ms=(time.perf_counter() - began) * 1000.0,
+        )
+
+    @staticmethod
+    def _decision_from_solution(
+        fg: FrameGroup,
+        s_var: pulp.LpVariable,
+        p_var: pulp.LpVariable,
+        t_end_ms: float,
+    ) -> SchedulingDecision:
+        p_value = p_var.value()
+        is_postponed = bool(round(p_value)) if p_value is not None else False
+        if is_postponed:
+            # s_prime is unconstrained by the postponement-feasibility
+            # branch once p=1 (Eq. 14 relaxes it), so the solver is free to
+            # park it anywhere; it minimizes the Eq. 12 delay term by
+            # setting s_prime close to original_start_ms, which would
+            # misreport a postponed FG as scheduled this cycle at ~0 delay.
+            # Report it the same way every other postponement in this
+            # codebase does (defer_around_window, _carryover_busy,
+            # _no_solution_result): at t_end_ms.
+            scheduled_start = t_end_ms
+        else:
+            s_value = s_var.value()
+            scheduled_start = s_value if s_value is not None else fg.original_start_ms
+        delay_ms = max(0.0, scheduled_start - fg.original_start_ms)
+        return SchedulingDecision(
+            fg_id=fg.fg_id,
+            scheduled_start_ms=scheduled_start,
+            is_postponed=is_postponed,
+            delay_ms=delay_ms,
+        )
+
+    @staticmethod
+    def _trivial_result(
+        d_free_ms: float,
+        d_sensing_ms: float,
+        t_start_ms: float,
+        t_end_ms: float,
+        began: float,
+    ) -> ScheduleResult:
+        """Window placement when there are no Frame Groups to schedule."""
+        t_free_start = t_start_ms
+        t_free_end = t_free_start + d_free_ms
+        t_sense_start = t_free_end
+        t_sense_end = t_sense_start + d_sensing_ms
+        status = "Optimal" if t_sense_end <= t_end_ms else "Infeasible"
+        return ScheduleResult(
+            decisions=[],
+            t_free_start_ms=t_free_start,
+            t_free_end_ms=t_free_end,
+            t_sense_start_ms=t_sense_start,
+            t_sense_end_ms=t_sense_end,
+            solver_status=status,
+            solve_time_ms=(time.perf_counter() - began) * 1000.0,
         )
