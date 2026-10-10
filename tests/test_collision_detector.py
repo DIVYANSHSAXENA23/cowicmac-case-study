@@ -4,6 +4,7 @@ import math
 
 import pytest
 
+from cowic.exceptions import ConfigurationError
 from cowic.sim.channel_medium import OVERLAP_TOLERANCE_MS, ChannelMedium
 
 
@@ -82,7 +83,7 @@ def test_failed_transmission_stays_failed_on_third_overlap() -> None:
 def test_register_transmission_rejects_non_positive_duration() -> None:
     """Zero or negative duration bursts are invalid."""
     medium = ChannelMedium()
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigurationError):
         medium.register_transmission("X", "WiFi", start_ms=0.0, duration_ms=0.0)
 
 
@@ -90,7 +91,7 @@ def test_register_transmission_rejects_duplicate_trans_id() -> None:
     """Registering the same trans_id twice raises an error."""
     medium = ChannelMedium()
     medium.register_transmission("X", "WiFi", start_ms=0.0, duration_ms=1.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigurationError):
         medium.register_transmission("X", "WiFi", start_ms=5.0, duration_ms=1.0)
 
 
@@ -163,7 +164,7 @@ def test_register_transmission_rejects_non_finite(
 ) -> None:
     """NaN/inf would otherwise never collide and silently report success."""
     medium = ChannelMedium()
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigurationError):
         medium.register_transmission("X", "WiFi", start_ms, duration_ms)
     assert medium.transmissions == []
 

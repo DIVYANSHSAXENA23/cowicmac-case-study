@@ -27,6 +27,8 @@ window start) is not reported as a collision.
 import math
 from dataclasses import dataclass, replace
 
+from cowic.exceptions import ConfigurationError
+
 # Overlaps up to 1 us are treated as touching. CBC round-off reaches ~1 us
 # (seen on Traffic I), while one IEEE 802.15.4 symbol lasts 16 us, so no
 # physically meaningful collision is hidden.
@@ -90,19 +92,19 @@ class ChannelMedium:
         current outcome.
 
         Raises:
-            ValueError: if ``start_ms`` or ``duration_ms`` is not finite,
-                ``duration_ms`` is not positive, or ``trans_id`` was already
-                registered.
+            ConfigurationError: if ``start_ms`` or ``duration_ms`` is not
+                finite, ``duration_ms`` is not positive, or ``trans_id`` was
+                already registered.
         """
         if not (math.isfinite(start_ms) and math.isfinite(duration_ms)):
-            raise ValueError(
+            raise ConfigurationError(
                 f"start_ms and duration_ms must be finite, got "
                 f"{start_ms} and {duration_ms}"
             )
         if duration_ms <= 0:
-            raise ValueError(f"duration_ms must be positive, got {duration_ms}")
+            raise ConfigurationError(f"duration_ms must be positive, got {duration_ms}")
         if trans_id in self._index_by_id:
-            raise ValueError(f"trans_id {trans_id!r} already registered")
+            raise ConfigurationError(f"trans_id {trans_id!r} already registered")
 
         end_ms = start_ms + duration_ms
         collided = False
