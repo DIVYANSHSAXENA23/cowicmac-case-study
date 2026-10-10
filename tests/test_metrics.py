@@ -169,3 +169,64 @@ def test_calculator_accepts_mapping_and_rejects_unknown_fg() -> None:
             horizon_ms=100.0,
             zigbee_capacity_ms=0.0,
         )
+
+
+def test_wifi_drop_rate_counts_each_fg_once_on_duplicate_entries() -> None:
+    """A decisions list with more than one entry per fg_id (e.g. a full
+    per-cycle history rather than one final outcome per FG) must not
+    double-count that FG's airtime - only its last entry counts."""
+    duplicated = [
+        SchedulingDecision(4, 70.0, True, 0.0),  # stale, superseded below
+        SchedulingDecision(4, 100.0, True, 8.0),  # final: dropped
+    ]
+    single = [SchedulingDecision(4, 100.0, True, 8.0)]
+    assert wifi_drop_rate(duplicated, FGS) == wifi_drop_rate(single, FGS)
+
+
+def test_zigbee_gain_ratio_clips_to_horizon() -> None:
+    """A record straddling the horizon boundary only contributes its
+    in-window portion to G_z when horizon_ms is given."""
+    records = [_rec("zigbee", 95.0, 110.0)]
+    unclipped = zigbee_gain_ratio(records, zigbee_capacity_ms=100.0)
+    clipped = zigbee_gain_ratio(records, zigbee_capacity_ms=100.0, horizon_ms=100.0)
+    assert unclipped == pytest.approx(15.0 / 100.0)
+    assert clipped == pytest.approx(5.0 / 100.0)
+
+
+def test_wifi_collision_rate_clips_to_horizon() -> None:
+    """Consistent windowing with spectrum_utilization/zigbee_gain_ratio."""
+    records = [
+        _rec("wifi", 95.0, 110.0, success=False),
+        _rec("wifi", 0.0, 50.0, success=True),
+    ]
+    unclipped = wifi_collision_rate(records)
+    clipped = wifi_collision_rate(records, horizon_ms=100.0)
+    # Unclipped: 15 ms failed / 65 ms total. Clipped: 5 ms failed / 55 ms total.
+    assert unclipped == pytest.approx(15.0 / 65.0)
+    assert clipped == pytest.approx(5.0 / 55.0)
+
+
+def test_delay_overhead_excludes_collided_fg_with_delivered_fg_ids() -> None:
+    """An FG scheduled on time (not postponed) but lost to a collision must
+    not count as 'delivered' for jitter/max-delay when delivered_fg_ids is
+    supplied, even though the deadline-only heuristic would include it."""
+    on_time = [SchedulingDecision(1, 10.0, False, 0.0)]
+    jitter, moved, max_delay = delay_overhead(on_time, FGS, delivered_fg_ids=set())
+    assert max_delay == 0.0
+    assert moved == 0
+    # Without delivered_fg_ids, the same decision is treated as delivered.
+    _, _, max_delay_no_filter = delay_overhead(on_time, FGS)
+    assert max_delay_no_filter == 0.0  # delay_ms is 0 either way here
+
+
+def test_calculator_threads_delivered_fg_ids_into_delay_overhead() -> None:
+    calc = MetricsCalculator()
+    metrics = calc.compute(
+        [],
+        DECISIONS,
+        FGS,
+        horizon_ms=100.0,
+        zigbee_capacity_ms=0.0,
+        delivered_fg_ids={1, 2},  # FG 3 excluded despite not being "dropped"
+    )
+    assert metrics.max_fg_delay_ms == 20.0  # only FG 2's delay remains

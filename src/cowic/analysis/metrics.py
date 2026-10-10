@@ -64,11 +64,19 @@ def zigbee_clean_capacity_ms(d_free_ms: float, cycles: int) -> float:
 
 
 def zigbee_gain_ratio(
-    transmissions: Iterable[TransmissionRecord], zigbee_capacity_ms: float
+    transmissions: Iterable[TransmissionRecord],
+    zigbee_capacity_ms: float,
+    horizon_ms: float | None = None,
 ) -> float:
-    """G_z: successful ZigBee airtime over clean-medium capacity, at most 1."""
+    """G_z: successful ZigBee airtime over clean-medium capacity, at most 1.
+
+    ``horizon_ms``, if given, clips each record to ``[0, horizon_ms]``
+    first, matching :func:`spectrum_utilization`'s windowing.
+    """
     _check_non_negative(zigbee_capacity_ms=zigbee_capacity_ms)
-    delivered = _airtime(transmissions, ZIGBEE, successful_only=True)
+    delivered = _airtime(
+        transmissions, ZIGBEE, successful_only=True, horizon_ms=horizon_ms
+    )
     if zigbee_capacity_ms == 0:
         return 0.0
     return min(1.0, delivered / zigbee_capacity_ms)
@@ -78,10 +86,20 @@ def wifi_drop_rate(
     decisions: Iterable[SchedulingDecision],
     frame_groups: Mapping[int, FrameGroup],
 ) -> float:
-    """PDR_w: airtime of FGs postponed past their deadline over all FG airtime."""
+    """PDR_w: airtime of FGs postponed past their deadline over all FG airtime.
+
+    Each ``fg_id`` is counted once, using its last (final) decision in
+    ``decisions`` - a caller that supplies more than one entry per FG
+    (e.g. a full per-cycle decision history rather than one final outcome
+    per FG) would otherwise have that FG's airtime added to both
+    ``requested`` and, if applicable, ``dropped`` once per entry.
+    """
+    final_by_id: dict[int, SchedulingDecision] = {}
+    for decision in decisions:
+        final_by_id[decision.fg_id] = decision
     requested = 0.0
     dropped = 0.0
-    for decision in decisions:
+    for decision in final_by_id.values():
         fg = frame_groups[decision.fg_id]
         requested += fg.duration_ms
         if _is_dropped(decision, fg):
@@ -89,13 +107,21 @@ def wifi_drop_rate(
     return dropped / requested if requested else 0.0
 
 
-def wifi_collision_rate(transmissions: Iterable[TransmissionRecord]) -> float:
-    """Share of transmitted WiFi airtime corrupted by a collision."""
+def wifi_collision_rate(
+    transmissions: Iterable[TransmissionRecord], horizon_ms: float | None = None
+) -> float:
+    """Share of transmitted WiFi airtime corrupted by a collision.
+
+    ``horizon_ms``, if given, clips each record to ``[0, horizon_ms]``
+    first, matching :func:`spectrum_utilization`'s windowing so airtime
+    outside the simulated run is not double-counted against it.
+    """
     records = [r for r in transmissions if r.protocol == WIFI]
-    total = _airtime(records, WIFI, successful_only=False)
+    total = _airtime(records, WIFI, successful_only=False, horizon_ms=horizon_ms)
     if not total:
         return 0.0
-    return 1.0 - _airtime(records, WIFI, successful_only=True) / total
+    successful = _airtime(records, WIFI, successful_only=True, horizon_ms=horizon_ms)
+    return 1.0 - successful / total
 
 
 def spectrum_utilization(
@@ -123,19 +149,31 @@ def spectrum_utilization(
 def delay_overhead(
     decisions: Iterable[SchedulingDecision],
     frame_groups: Mapping[int, FrameGroup],
+    delivered_fg_ids: set[int] | None = None,
 ) -> tuple[float, int, float]:
     """Return ``(jitter_ms, moved_fg_count, max_fg_delay_ms)``.
 
     Jitter and maximum delay cover delivered FGs only; a dropped FG has no
     delivery delay. Every FG moved from its original start counts as moved,
     including postponed ones.
+
+    ``delivered_fg_ids``, if given, refines "delivered" beyond the deadline
+    heuristic in ``_is_dropped``: an FG scheduled on time but lost to a
+    channel collision (tracked separately via ``wifi_collision_rate``, not
+    a scheduling drop) is excluded too. Pass the set of ``fg_id``s with a
+    successful registered WiFi transmission; omit it to fall back to the
+    deadline-only heuristic when per-FG delivery data isn't available.
     """
     delays: list[float] = []
     moved = 0
     for decision in decisions:
         if decision.delay_ms > MOVED_TOLERANCE_MS:
             moved += 1
-        if not _is_dropped(decision, frame_groups[decision.fg_id]):
+        fg = frame_groups[decision.fg_id]
+        dropped = _is_dropped(decision, fg)
+        if delivered_fg_ids is not None:
+            dropped = dropped or decision.fg_id not in delivered_fg_ids
+        if not dropped:
             delays.append(max(0.0, decision.delay_ms))
     jitter = statistics.pstdev(delays) if len(delays) > 1 else 0.0
     return jitter, moved, max(delays, default=0.0)
@@ -152,6 +190,7 @@ class MetricsCalculator:
         horizon_ms: float,
         zigbee_capacity_ms: float,
         control_airtime_ms: float = 0.0,
+        delivered_fg_ids: set[int] | None = None,
     ) -> SimulationMetrics:
         """Derive the Section 5.1 metrics for one simulation run.
 
@@ -162,6 +201,10 @@ class MetricsCalculator:
             horizon_ms: Simulated duration.
             zigbee_capacity_ms: Clean-medium ZigBee airtime (G_z denominator).
             control_airtime_ms: Sensing/control airtime counted in U_eff.
+            delivered_fg_ids: ``fg_id``s with a successful registered WiFi
+                transmission, for a collision-aware ``delay_overhead``
+                (see its docstring). Omit if unavailable; delay/jitter
+                then fall back to the deadline-only "dropped" heuristic.
 
         Raises:
             ConfigurationError: On a non-positive horizon or negative airtime.
@@ -172,9 +215,11 @@ class MetricsCalculator:
             if isinstance(frame_groups, Mapping)
             else {fg.fg_id: fg for fg in frame_groups}
         )
-        jitter, moved, max_delay = delay_overhead(decisions, by_id)
+        jitter, moved, max_delay = delay_overhead(decisions, by_id, delivered_fg_ids)
         return SimulationMetrics(
-            zigbee_gain_ratio=zigbee_gain_ratio(transmissions, zigbee_capacity_ms),
+            zigbee_gain_ratio=zigbee_gain_ratio(
+                transmissions, zigbee_capacity_ms, horizon_ms
+            ),
             wifi_drop_rate=wifi_drop_rate(decisions, by_id),
             spectrum_utilization=spectrum_utilization(
                 transmissions, horizon_ms, control_airtime_ms
@@ -182,7 +227,7 @@ class MetricsCalculator:
             wifi_jitter_ms=jitter,
             moved_fg_count=moved,
             max_fg_delay_ms=max_delay,
-            wifi_collision_rate=wifi_collision_rate(transmissions),
+            wifi_collision_rate=wifi_collision_rate(transmissions, horizon_ms),
         )
 
 
@@ -197,12 +242,17 @@ def _airtime(
     transmissions: Iterable[TransmissionRecord],
     protocol: str,
     successful_only: bool,
+    horizon_ms: float | None = None,
 ) -> float:
-    return sum(
-        r.end_time_ms - r.start_time_ms
-        for r in transmissions
-        if r.protocol == protocol and (r.success or not successful_only)
-    )
+    total = 0.0
+    for r in transmissions:
+        if r.protocol != protocol or (not r.success and successful_only):
+            continue
+        start, end = r.start_time_ms, r.end_time_ms
+        if horizon_ms is not None:
+            start, end = max(start, 0.0), min(end, horizon_ms)
+        total += max(0.0, end - start)
+    return total
 
 
 def _check_non_negative(**values: float) -> None:
