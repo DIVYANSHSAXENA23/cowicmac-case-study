@@ -28,6 +28,7 @@ from itertools import combinations
 
 import pulp
 
+from cowic.exceptions import ConfigurationError
 from cowic.models.frame_group import FrameGroup, SchedulingDecision
 
 # Numerical floor for the postponement-cost denominator (Eq. 2), matching
@@ -122,15 +123,16 @@ class MILPScheduler:
         """Formulate and solve the MILP program for one scheduling cycle.
 
         Raises:
-            ValueError: if the scheduling horizon or window durations are
-                invalid (``t_end_ms <= t_start_ms``, or a negative duration).
+            ConfigurationError: if the scheduling horizon or window
+                durations are invalid (``t_end_ms <= t_start_ms``, or a
+                negative duration).
         """
         if t_end_ms <= t_start_ms:
-            raise ValueError(
+            raise ConfigurationError(
                 f"t_end_ms ({t_end_ms}) must be greater than t_start_ms ({t_start_ms})"
             )
         if d_free_ms < 0 or d_sensing_ms < 0:
-            raise ValueError("d_free_ms and d_sensing_ms must be non-negative")
+            raise ConfigurationError("d_free_ms and d_sensing_ms must be non-negative")
 
         began = time.perf_counter()
 
@@ -292,7 +294,7 @@ class MILPScheduler:
         )
 
         decisions = [
-            self._decision_from_solution(fg, s_prime[fg.fg_id], p[fg.fg_id])
+            self._decision_from_solution(fg, s_prime[fg.fg_id], p[fg.fg_id], t_end_ms)
             for fg in frame_groups
         ]
 
@@ -346,11 +348,23 @@ class MILPScheduler:
         fg: FrameGroup,
         s_var: pulp.LpVariable,
         p_var: pulp.LpVariable,
+        t_end_ms: float,
     ) -> SchedulingDecision:
-        s_value = s_var.value()
-        scheduled_start = s_value if s_value is not None else fg.original_start_ms
         p_value = p_var.value()
         is_postponed = bool(round(p_value)) if p_value is not None else False
+        if is_postponed:
+            # s_prime is unconstrained by the postponement-feasibility
+            # branch once p=1 (Eq. 14 relaxes it), so the solver is free to
+            # park it anywhere; it minimizes the Eq. 12 delay term by
+            # setting s_prime close to original_start_ms, which would
+            # misreport a postponed FG as scheduled this cycle at ~0 delay.
+            # Report it the same way every other postponement in this
+            # codebase does (defer_around_window, _carryover_busy,
+            # _no_solution_result): at t_end_ms.
+            scheduled_start = t_end_ms
+        else:
+            s_value = s_var.value()
+            scheduled_start = s_value if s_value is not None else fg.original_start_ms
         delay_ms = max(0.0, scheduled_start - fg.original_start_ms)
         return SchedulingDecision(
             fg_id=fg.fg_id,

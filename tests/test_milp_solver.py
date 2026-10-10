@@ -1,5 +1,6 @@
 """Unit tests for the MILP scheduler (Eq. 11-17)."""
 
+from cowic.exceptions import ConfigurationError
 from cowic.models.frame_group import FrameGroup
 from cowic.wifi.milp_scheduler import MILPScheduler
 
@@ -36,10 +37,10 @@ def test_schedule_rejects_invalid_horizon() -> None:
         scheduler.schedule(
             [], d_free_ms=10.0, d_sensing_ms=5.0, t_start_ms=100.0, t_end_ms=50.0
         )
-    except ValueError:
+    except ConfigurationError:
         pass
     else:
-        raise AssertionError("expected ValueError for invalid horizon")
+        raise AssertionError("expected ConfigurationError for invalid horizon")
 
 
 def test_schedule_rejects_negative_window_durations() -> None:
@@ -49,10 +50,10 @@ def test_schedule_rejects_negative_window_durations() -> None:
         scheduler.schedule(
             [], d_free_ms=-1.0, d_sensing_ms=5.0, t_start_ms=0.0, t_end_ms=100.0
         )
-    except ValueError:
+    except ConfigurationError:
         pass
     else:
-        raise AssertionError("expected ValueError for negative d_free_ms")
+        raise AssertionError("expected ConfigurationError for negative d_free_ms")
 
 
 def test_schedule_empty_frame_groups_places_windows_at_start() -> None:
@@ -165,6 +166,27 @@ def test_schedule_postpones_urgent_fg_only_when_unavoidable() -> None:
     )
     assert result.solver_status == "Optimal"
     assert result.decisions[0].is_postponed is False
+
+
+def test_schedule_postponed_fg_reported_at_cycle_end() -> None:
+    """A postponed FG's s_prime is unconstrained once P_k=1 (Eq. 14's
+    causality/deadline terms relax), so the solver can park it anywhere,
+    typically near original_start_ms to minimize the irrelevant Eq. 12
+    delay term. Reporting must not leak that phantom position: a
+    postponed FG is always reported at t_end_ms, matching every other
+    postponement in the codebase (defer_around_window, _carryover_busy)."""
+    scheduler = MILPScheduler()
+    # Arrives at 95 needing 20ms: s >= 95 and s + 20 <= t_end_ms (100) is
+    # impossible, forcing postponement regardless of cost weights.
+    late_fg = _fg(1, start=95.0, duration=20.0, deadline=300.0, arrival=95.0)
+    result = scheduler.schedule(
+        [late_fg], d_free_ms=0.0, d_sensing_ms=0.0, t_start_ms=0.0, t_end_ms=100.0
+    )
+    assert result.solver_status == "Optimal"
+    decision = result.decisions[0]
+    assert decision.is_postponed is True
+    assert decision.scheduled_start_ms == 100.0
+    assert decision.delay_ms == 5.0
 
 
 def test_schedule_respects_minimum_delay_for_moved_fg() -> None:
