@@ -327,7 +327,7 @@ class MILPScheduler:
                 fg_id=fg.fg_id,
                 scheduled_start_ms=t_end_ms,
                 is_postponed=True,
-                delay_ms=t_end_ms - fg.original_start_ms,
+                delay_ms=max(0.0, t_end_ms - fg.original_start_ms),
             )
             for fg in frame_groups
         ]

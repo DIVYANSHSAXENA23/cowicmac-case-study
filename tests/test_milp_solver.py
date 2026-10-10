@@ -213,3 +213,23 @@ def test_schedule_infeasible_problem_reports_all_postponed_with_no_window() -> N
     assert result.t_sense_start_ms == result.t_sense_end_ms
     (decision,) = result.decisions
     assert decision.is_postponed is True
+
+
+def test_schedule_non_optimal_clamps_delay_for_future_fg() -> None:
+    """A FG whose original_start_ms is after t_end_ms (not yet arrived)
+    must report delay_ms=0.0 in the non-optimal path, not a negative
+    value, matching the clamping already applied on the optimal path."""
+    scheduler = MILPScheduler()
+    impossible = _fg(1, start=10.0, duration=50.0, deadline=20.0, arrival=0.0)
+    future_fg = _fg(2, start=500.0, duration=5.0, deadline=600.0, arrival=500.0)
+    result = scheduler.schedule(
+        [impossible, future_fg],
+        d_free_ms=0.0,
+        d_sensing_ms=0.0,
+        t_start_ms=0.0,
+        t_end_ms=100.0,
+    )
+    assert result.solver_status != "Optimal"
+    by_id = {d.fg_id: d for d in result.decisions}
+    assert by_id[2].is_postponed is True
+    assert by_id[2].delay_ms == 0.0
