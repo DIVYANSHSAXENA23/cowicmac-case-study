@@ -16,6 +16,7 @@ No baseline reserves a sensing window, so it is reported as an empty interval
 at the start of the cycle.
 """
 
+import math
 import time
 from collections.abc import Sequence
 
@@ -114,12 +115,8 @@ def schedule_ecc(
     ``w = min(d_free_ms, nav_limit_ms, cycle length)``; ECC does not adapt
     its position or exceed the NAV limit, whatever ZigBee demands.
 
-    FGs are served in original order on one channel. An FG keeps its original
-    start unless it overlaps the window or an earlier deferred FG, in which
-    case it starts as soon as the channel is free again. An FG that would then
-    finish after its deadline or after the cycle end is postponed to the next
-    cycle: it is reported at ``t_end_ms`` with ``is_postponed=True`` and does
-    not occupy airtime in this cycle.
+    WiFi FGs that collide with the window are deferred as described in
+    :func:`defer_around_window`.
     """
     _check_cycle(t_start_ms, t_end_ms)
     _check_demand(d_free_ms)
@@ -128,27 +125,45 @@ def schedule_ecc(
     began = time.perf_counter()
     window_end = t_start_ms + min(d_free_ms, nav_limit_ms, t_end_ms - t_start_ms)
 
-    by_id: dict[int, SchedulingDecision] = {}
-    channel_free_at = t_start_ms
-    for fg in sorted(frame_groups, key=lambda fg: fg.original_start_ms):
-        start = max(fg.original_start_ms, channel_free_at)
-        overlaps = start < window_end and start + fg.duration_ms > t_start_ms
-        if overlaps and window_end > t_start_ms:
-            start = window_end  # Silenced by the NAV until the window ends.
-        end = start + fg.duration_ms
-        if end > fg.deadline_ms or end > t_end_ms:
-            by_id[fg.fg_id] = _decision(fg, t_end_ms, postponed=True)
-            continue
-        by_id[fg.fg_id] = _decision(fg, start, postponed=False)
-        channel_free_at = end
-
     return _result(
-        [by_id[fg.fg_id] for fg in frame_groups],
+        defer_around_window(frame_groups, t_start_ms, window_end, t_end_ms),
         free=(t_start_ms, window_end),
         t_start_ms=t_start_ms,
         status="ecc_nav",
         began=began,
     )
+
+
+def defer_around_window(
+    frame_groups: Sequence[FrameGroup],
+    window_start_ms: float,
+    window_end_ms: float,
+    t_end_ms: float,
+) -> list[SchedulingDecision]:
+    """Defer FGs that would overlap ``[window_start_ms, window_end_ms]``.
+
+    FGs are served in original order on one channel. An FG keeps its original
+    start unless it overlaps the window or an earlier deferred FG, in which
+    case it starts as soon as the channel is free again. A deferred FG that
+    would then finish after its deadline or after ``t_end_ms`` is postponed to
+    the next cycle: it is reported at ``t_end_ms`` with ``is_postponed=True``
+    and does not occupy airtime in this cycle. Decisions follow input order.
+    """
+    by_id: dict[int, SchedulingDecision] = {}
+    channel_free_at = -math.inf
+    for fg in sorted(frame_groups, key=lambda fg: fg.original_start_ms):
+        start = max(fg.original_start_ms, channel_free_at)
+        overlaps = start < window_end_ms and start + fg.duration_ms > window_start_ms
+        if overlaps and window_end_ms > window_start_ms:
+            start = window_end_ms  # Kept silent until the window ends.
+        end = start + fg.duration_ms
+        moved = start > fg.original_start_ms
+        if moved and (end > fg.deadline_ms or end > t_end_ms):
+            by_id[fg.fg_id] = _decision(fg, t_end_ms, postponed=True)
+            continue
+        by_id[fg.fg_id] = _decision(fg, start, postponed=False)
+        channel_free_at = end
+    return [by_id[fg.fg_id] for fg in frame_groups]
 
 
 def _decision(fg: FrameGroup, start_ms: float, postponed: bool) -> SchedulingDecision:

@@ -181,6 +181,18 @@ def test_ecc_postpones_fg_overflowing_cycle() -> None:
     assert result.decisions[0].is_postponed
 
 
+def test_ecc_keeps_unmoved_fg_crossing_cycle_end() -> None:
+    # An FG that was never deferred keeps its original timing.
+    result = schedule_ecc([_fg(1, 45.0, 20.0)], 0.0, 50.0, d_free_ms=31.0)
+    assert not result.decisions[0].is_postponed
+    assert result.decisions[0].scheduled_start_ms == 45.0
+
+
+def test_ecc_ignores_fg_before_cycle() -> None:
+    result = schedule_ecc([_fg(1, -20.0, 5.0)], 0.0, 100.0, d_free_ms=31.0)
+    assert result.decisions[0].scheduled_start_ms == -20.0
+
+
 def test_ecc_preserves_input_order() -> None:
     fgs = [_fg(2, 60.0, 5.0), _fg(1, 10.0, 5.0)]
     result = schedule_ecc(fgs, 0.0, 200.0, d_free_ms=31.0)
@@ -210,8 +222,9 @@ def test_ecc_invariants_on_real_trace(profile: str) -> None:
             if decision.is_postponed:
                 continue
             end = decision.scheduled_start_ms + fg.duration_ms
-            assert end <= fg.deadline_ms
-            assert end <= cycle.end_ms
+            if decision.delay_ms > 0.0:
+                assert end <= fg.deadline_ms
+                assert end <= cycle.end_ms
             assert decision.scheduled_start_ms >= result.t_free_end_ms or (
                 end <= result.t_free_start_ms
             )
