@@ -190,3 +190,52 @@ def test_simulation_config_from_yaml_loads_exp4_milp_weights(tmp_path: Path) -> 
     assert config.gamma_sensing_weight == 10.0
     assert config.lambda_delay_weight == 1.0
     assert config.mu_base_cost == 100.0
+
+
+def test_simulation_engine_exposes_raw_transmission_records(short_trace: Path) -> None:
+    """After run(), raw per-transmission event records remain available
+    via last_medium, beyond the summary dict's aggregates."""
+    config = SimulationConfig(
+        scenario_name="Test_Records",
+        duration_s=3.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=1000.0,
+        wifi_scheduling="milp_soft_constraint",
+        ctc_direction="bidirectional",
+        zigbee_adaptation="lwsa",
+    )
+    engine = SimulationEngine(config)
+    assert engine.last_medium is None
+    result = engine.run()
+    assert engine.last_medium is not None
+    assert len(engine.last_medium.transmissions) > 0
+    total_records = len(engine.last_medium.transmissions)
+    total_summary = int(result["wifi_transmissions"] + result["zigbee_transmissions"])
+    assert total_records == total_summary
+
+
+def test_simulation_engine_falls_back_to_csma_ca_on_total_ctc_loss(
+    short_trace: Path,
+) -> None:
+    """When the CTC link always fails (per=1.0, no retries), the ZC must
+    fall back to uncoordinated CSMA/CA (the fixed legacy superframe)
+    rather than emit zero ZigBee activity for every cycle."""
+    config = SimulationConfig(
+        scenario_name="Test_CTCLoss",
+        duration_s=3.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=1000.0,
+        wifi_scheduling="milp_soft_constraint",
+        ctc_direction="bidirectional",
+        zigbee_adaptation="lwsa",
+        ctc_per=1.0,
+        ctc_max_retries=0,
+    )
+    result = SimulationEngine(config).run()
+    assert result["wbeacon_lost"] == result["cycles_run"]
+    assert result["csma_ca_fallback_cycles"] == result["cycles_run"]
+    assert result["zigbee_packets_attempted"] > 0

@@ -92,6 +92,7 @@ class SimulationConfig:
     zigbee_adaptation: str = "lwsa"
     ctc_per: float = 0.0
     ctc_delay_ms: float = 0.1
+    ctc_max_retries: int = 2
     zigbee_pending_packets: int = DEFAULT_ZIGBEE_PENDING_PACKETS
     gamma_sensing_weight: float | None = None
     lambda_delay_weight: float | None = None
@@ -159,6 +160,8 @@ class _BaselineScheduler:
     """
 
     def __init__(self, wifi_scheduling: str) -> None:
+        """Raises ConfigurationError if ``wifi_scheduling`` is not a
+        known baseline mode (``"none"``, ``"gap_search"``, ``"ecc_nav"``)."""
         if wifi_scheduling not in _BASELINE_STATUS:
             raise ConfigurationError(
                 f"Unknown baseline wifi_scheduling {wifi_scheduling!r}; "
@@ -174,6 +177,7 @@ class _BaselineScheduler:
         t_start_ms: float,
         t_end_ms: float,
     ) -> ScheduleResult:
+        """Dispatch to the baseline function for ``self.wifi_scheduling``."""
         del d_sensing_ms  # No baseline protects a sensing window.
         if self.wifi_scheduling == "none":
             return schedule_uncoordinated(frame_groups, t_start_ms, t_end_ms)
@@ -291,10 +295,12 @@ class _RunStats:
     fallback_cycles: int = 0
     wbeacon_delivered: int = 0
     wbeacon_lost: int = 0
+    csma_ca_fallback_cycles: int = 0
     zigbee_packets_attempted: int = 0
     max_fg_delay_ms: float = 0.0
 
     def record_cycle(self, outcome: CycleOutcome) -> None:
+        """Fold one completed AP cycle's outcome into the running totals."""
         self.cycles_run += 1
         if outcome.used_fallback:
             self.fallback_cycles += 1
@@ -309,6 +315,8 @@ class _RunStats:
             self.max_fg_delay_ms = max(self.max_fg_delay_ms, decision.delay_ms)
 
     def finalize(self, medium: ChannelMedium, horizon_ms: float) -> dict[str, float]:
+        """Combine the accumulated totals with ``medium``'s final
+        collision outcomes into the summary dict returned by ``run()``."""
         wifi_success = sum(
             1 for r in medium.successful_transmissions() if r.protocol == "wifi"
         )
@@ -331,6 +339,7 @@ class _RunStats:
             "fallback_cycles": float(self.fallback_cycles),
             "wbeacon_delivered": float(self.wbeacon_delivered),
             "wbeacon_lost": float(self.wbeacon_lost),
+            "csma_ca_fallback_cycles": float(self.csma_ca_fallback_cycles),
             "max_fg_delay_ms": self.max_fg_delay_ms,
             "zigbee_packets_attempted": float(self.zigbee_packets_attempted),
             "wifi_transmissions": float(total_wifi),
@@ -348,16 +357,19 @@ class SimulationEngine:
     """Coordinates the SimPy discrete-event simulation environment."""
 
     def __init__(self, config: SimulationConfig) -> None:
+        """Store ``config``; ``run()`` does all the actual work."""
         self.config = config
+        self.last_medium: ChannelMedium | None = None
 
     def run(self) -> dict[str, float]:
         """Execute the discrete-event simulation scenario.
 
         Returns:
-            A summary dict (see :meth:`_RunStats.finalize`); raw
-            per-transmission ground truth remains available via the
-            :class:`~cowic.sim.channel_medium.ChannelMedium` instance used
-            internally, for callers that need finer-grained records.
+            A summary dict (see :meth:`_RunStats.finalize`). Raw
+            per-transmission event records remain available afterwards
+            via ``self.last_medium.transmissions`` (a documented run
+            artifact: :class:`~cowic.sim.channel_medium.ChannelMedium`),
+            for callers that need finer-grained data than the summary.
 
         Raises:
             ConfigurationError: if ``wifi_scheduling`` has no scheduler
@@ -370,7 +382,11 @@ class SimulationEngine:
 
         scheduler, optimal_statuses = _build_scheduler(config)
         medium = ChannelMedium()
-        ctc = CTCChannel(per=config.ctc_per, delay_ms=config.ctc_delay_ms)
+        ctc = CTCChannel(
+            per=config.ctc_per,
+            delay_ms=config.ctc_delay_ms,
+            max_retries=config.ctc_max_retries,
+        )
         ap = APOrchestrator(
             ctc=ctc,
             scheduler=scheduler,
@@ -389,6 +405,7 @@ class SimulationEngine:
         )
         env.run(until=horizon_ms)
 
+        self.last_medium = medium
         return stats.finalize(medium, horizon_ms)
 
     def _drive_cycles(
@@ -403,6 +420,8 @@ class SimulationEngine:
         medium: ChannelMedium,
         stats: _RunStats,
     ) -> simpy.events.ProcessGenerator:
+        """SimPy process: advance from cycle to cycle, running one full
+        AP/ZC/CTC/medium exchange at each cycle boundary."""
         horizon_ms = config.duration_s * 1000.0
         bidirectional = config.ctc_direction == "bidirectional"
         adaptive = config.zigbee_adaptation == "lwsa"
@@ -448,14 +467,12 @@ class SimulationEngine:
                 )
                 superframe = zc.process_wbeacon(outcome.wbeacon, fragments)
             elif adaptive:
-                # WBeacon lost: no superframe can be adapted this cycle.
-                superframe = SuperframeConfig(
-                    slot_duration_ms=0.0,
-                    cap_slots=0,
-                    cfp_slots=0,
-                    beacon_offset_ms=cycle.start_ms,
-                    beacon_interval_ms=0.0,
-                )
+                # Handshake timeout exhausted (Issue #3): the ZC falls back
+                # to uncoordinated CSMA/CA, i.e. the same WiFi-oblivious
+                # legacy superframe as "fixed" adaptation, rather than
+                # going dark for the cycle.
+                stats.csma_ca_fallback_cycles += 1
+                superframe = _fixed_superframe(cycle.start_ms)
             else:
                 superframe = _fixed_superframe(cycle.start_ms)
 
