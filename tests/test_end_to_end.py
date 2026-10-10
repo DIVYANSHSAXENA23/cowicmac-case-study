@@ -273,6 +273,8 @@ def test_simulation_engine_applies_ctc_delay_as_simulated_time(
     fast_result = SimulationEngine(negligible_delay).run()
     slow_result = SimulationEngine(heavy_delay).run()
     assert slow_result["cycles_run"] < fast_result["cycles_run"]
+
+
 def _fixed_baseline_config(
     trace: Path, wifi_scheduling: str, ctc_direction: str, **overrides: float
 ) -> SimulationConfig:

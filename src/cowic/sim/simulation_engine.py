@@ -495,14 +495,13 @@ class SimulationEngine:
                     outcome.schedule.t_free_end_ms,
                 )
                 superframe = zc.process_wbeacon(outcome.wbeacon, fragments)
-            elif adaptive:
-                # Handshake timeout exhausted (Issue #3): the ZC falls back
-                # to uncoordinated CSMA/CA, i.e. the same WiFi-oblivious
-                # legacy superframe as "fixed" adaptation, rather than
-                # going dark for the cycle.
-                stats.csma_ca_fallback_cycles += 1
-                superframe = _fixed_superframe(cycle.start_ms)
             else:
+                if adaptive:
+                    # Handshake timeout exhausted (Issue #3): the ZC falls
+                    # back to uncoordinated CSMA/CA, i.e. the same
+                    # WiFi-oblivious legacy superframe as "fixed"
+                    # adaptation, rather than going dark for the cycle.
+                    stats.csma_ca_fallback_cycles += 1
                 superframe = _fixed_superframe(
                     _fixed_anchor_ms(config, outcome, cycle.start_ms)
                 )
