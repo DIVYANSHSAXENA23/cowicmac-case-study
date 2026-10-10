@@ -1,9 +1,24 @@
-"""Unit tests for MILP scheduler."""
-
-import pytest
+"""Unit tests for the MILP scheduler (Eq. 11-17)."""
 
 from cowic.models.frame_group import FrameGroup
 from cowic.wifi.milp_scheduler import MILPScheduler
+
+
+def _fg(
+    fg_id: int,
+    start: float,
+    duration: float = 10.0,
+    deadline: float = 500.0,
+    arrival: float = 0.0,
+) -> FrameGroup:
+    return FrameGroup(
+        fg_id=fg_id,
+        arrival_time_ms=arrival,
+        duration_ms=duration,
+        deadline_ms=deadline,
+        original_start_ms=start,
+        qos_sensitive=False,
+    )
 
 
 def test_milp_scheduler_instantiation() -> None:
@@ -11,26 +26,155 @@ def test_milp_scheduler_instantiation() -> None:
     scheduler = MILPScheduler(gamma=10.0, lambda_weight=1.0, mu_base=100.0)
     assert scheduler.gamma == 10.0
     assert scheduler.lambda_weight == 1.0
+    assert scheduler.mu_base == 100.0
 
 
-def test_milp_schedule_stub_raises() -> None:
-    """Verify schedule method raises NotImplementedError before implementation."""
+def test_schedule_rejects_invalid_horizon() -> None:
+    """t_end_ms must be strictly greater than t_start_ms."""
+    scheduler = MILPScheduler()
+    try:
+        scheduler.schedule(
+            [], d_free_ms=10.0, d_sensing_ms=5.0, t_start_ms=100.0, t_end_ms=50.0
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for invalid horizon")
+
+
+def test_schedule_rejects_negative_window_durations() -> None:
+    """Negative free/sensing window durations are invalid."""
+    scheduler = MILPScheduler()
+    try:
+        scheduler.schedule(
+            [], d_free_ms=-1.0, d_sensing_ms=5.0, t_start_ms=0.0, t_end_ms=100.0
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for negative d_free_ms")
+
+
+def test_schedule_empty_frame_groups_places_windows_at_start() -> None:
+    """With no FGs, the free window is placed first, then the sensing window."""
+    scheduler = MILPScheduler()
+    result = scheduler.schedule(
+        [], d_free_ms=30.0, d_sensing_ms=10.0, t_start_ms=0.0, t_end_ms=100.0
+    )
+    assert result.decisions == []
+    assert result.t_free_start_ms == 0.0
+    assert result.t_free_end_ms == 30.0
+    assert result.t_sense_start_ms == 30.0
+    assert result.t_sense_end_ms == 40.0
+    assert result.solver_status == "Optimal"
+
+
+def test_schedule_empty_frame_groups_infeasible_when_windows_overflow() -> None:
+    """Windows that cannot both fit in the horizon are reported infeasible."""
+    scheduler = MILPScheduler()
+    result = scheduler.schedule(
+        [], d_free_ms=80.0, d_sensing_ms=30.0, t_start_ms=0.0, t_end_ms=100.0
+    )
+    assert result.solver_status == "Infeasible"
+
+
+def test_schedule_single_fg_outside_windows_keeps_original_start() -> None:
+    """A single FG with ample slack should not need to move."""
+    scheduler = MILPScheduler()
+    fgs = [_fg(1, start=0.0, duration=10.0, deadline=500.0)]
+    result = scheduler.schedule(
+        fgs, d_free_ms=20.0, d_sensing_ms=10.0, t_start_ms=0.0, t_end_ms=200.0
+    )
+    assert result.solver_status == "Optimal"
+    assert len(result.decisions) == 1
+    decision = result.decisions[0]
+    assert decision.fg_id == 1
+    assert decision.is_postponed is False
+
+
+def test_schedule_resolves_overlap_with_free_window() -> None:
+    """An FG originally overlapping the free window must be moved clear of it."""
+    scheduler = MILPScheduler()
+    # FG originally at [10, 30) would overlap a free window placed at [0, 40).
+    fgs = [_fg(1, start=10.0, duration=20.0, deadline=500.0, arrival=0.0)]
+    result = scheduler.schedule(
+        fgs, d_free_ms=40.0, d_sensing_ms=10.0, t_start_ms=0.0, t_end_ms=200.0
+    )
+    assert result.solver_status == "Optimal"
+    decision = result.decisions[0]
+    fg_end = decision.scheduled_start_ms + 20.0
+    free_start, free_end = result.t_free_start_ms, result.t_free_end_ms
+    overlaps_free = decision.scheduled_start_ms < free_end and free_start < fg_end
+    assert not overlaps_free, "scheduled FG must not overlap the free window"
+
+
+def test_schedule_never_overlaps_sensing_window() -> None:
+    """Eq. 17: no WiFi FG may ever overlap the sensing window."""
     scheduler = MILPScheduler()
     fgs = [
-        FrameGroup(
-            fg_id=1,
-            arrival_time_ms=0.0,
-            duration_ms=10.0,
-            deadline_ms=100.0,
-            original_start_ms=0.0,
-            qos_sensitive=True,
-        )
+        _fg(1, start=0.0, duration=15.0, deadline=500.0),
+        _fg(2, start=20.0, duration=15.0, deadline=500.0),
+        _fg(3, start=45.0, duration=15.0, deadline=500.0),
     ]
-    with pytest.raises(NotImplementedError):
-        scheduler.schedule(
-            fgs,
-            d_free_ms=30.0,
-            d_sensing_ms=10.0,
-            t_start_ms=0.0,
-            t_end_ms=100.0,
+    result = scheduler.schedule(
+        fgs, d_free_ms=0.0, d_sensing_ms=10.0, t_start_ms=0.0, t_end_ms=120.0
+    )
+    assert result.solver_status == "Optimal"
+    sense_start, sense_end = result.t_sense_start_ms, result.t_sense_end_ms
+    for decision in result.decisions:
+        fg = next(f for f in fgs if f.fg_id == decision.fg_id)
+        fg_end = decision.scheduled_start_ms + fg.duration_ms
+        overlaps_sense = (
+            decision.scheduled_start_ms < sense_end and sense_start < fg_end
         )
+        assert not overlaps_sense, f"FG {fg.fg_id} overlaps the sensing window"
+
+
+def test_schedule_produces_non_overlapping_frame_groups() -> None:
+    """Scheduled (non-postponed) FGs must never overlap one another."""
+    scheduler = MILPScheduler()
+    fgs = [
+        _fg(1, start=0.0, duration=10.0, deadline=300.0),
+        _fg(2, start=5.0, duration=10.0, deadline=300.0),
+        _fg(3, start=8.0, duration=10.0, deadline=300.0),
+    ]
+    result = scheduler.schedule(
+        fgs, d_free_ms=0.0, d_sensing_ms=0.0, t_start_ms=0.0, t_end_ms=200.0
+    )
+    assert result.solver_status == "Optimal"
+    scheduled = [
+        (d, next(f for f in fgs if f.fg_id == d.fg_id).duration_ms)
+        for d in result.decisions
+        if not d.is_postponed
+    ]
+    intervals = sorted(
+        (d.scheduled_start_ms, d.scheduled_start_ms + dur) for d, dur in scheduled
+    )
+    for (s1, e1), (s2, e2) in zip(intervals, intervals[1:]):
+        assert e1 <= s2 + 1e-6, "scheduled FGs must not overlap"
+
+
+def test_schedule_postpones_urgent_fg_only_when_unavoidable() -> None:
+    """A FG that cannot fit before its deadline within the horizon is postponed."""
+    scheduler = MILPScheduler()
+    # Deadline is before t_end_ms, so the FG must be scheduled this cycle if
+    # feasible; here it is feasible (ample room), so it should NOT postpone.
+    fgs = [_fg(1, start=0.0, duration=10.0, deadline=50.0, arrival=0.0)]
+    result = scheduler.schedule(
+        fgs, d_free_ms=0.0, d_sensing_ms=0.0, t_start_ms=0.0, t_end_ms=100.0
+    )
+    assert result.solver_status == "Optimal"
+    assert result.decisions[0].is_postponed is False
+
+
+def test_schedule_respects_minimum_delay_for_moved_fg() -> None:
+    """A FG forced to move later reports a non-negative, consistent delay."""
+    scheduler = MILPScheduler()
+    fgs = [_fg(1, start=0.0, duration=20.0, deadline=500.0)]
+    result = scheduler.schedule(
+        fgs, d_free_ms=25.0, d_sensing_ms=0.0, t_start_ms=0.0, t_end_ms=200.0
+    )
+    decision = result.decisions[0]
+    expected_delay = max(0.0, decision.scheduled_start_ms - 0.0)
+    assert decision.delay_ms == expected_delay
+    assert decision.delay_ms >= 0.0

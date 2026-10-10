@@ -15,7 +15,7 @@ authors = [
 ]
 dependencies = [
     "simpy>=4.1.1",
-    "pulp>=2.8.0",
+    "pulp>=2.8.0,<3.0.0",  # pulp 3+/4+ rewrote LpVariable as a Rust-backed wrapper that breaks the classic keyword constructor API used by milp_scheduler.py
     "highspy>=1.7.0",
     "numpy>=1.26.0",
     "pandas>=2.2.0",
