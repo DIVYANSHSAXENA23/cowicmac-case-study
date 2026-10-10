@@ -74,13 +74,15 @@
   - Verification: Unit tests with precomputed mock transmission records.
 
 ### Milestone 4 (Afternoon: 14:00 – 18:00) — Benchmark Runs and Plotting
-- **Task 4.1 (`Nitesh050` & `upayanmazumder`):** Execute full experimental sweeps.
+- **Task 4.1 (`Nitesh050`):** Execute full experimental sweeps (Issue #11).
   - Deliverable: Run Exp 1 through Exp 6 across Traffic I and Traffic III.
   - Verification: Result CSV files stored under `results/`.
-- **Task 4.2 (`upayanmazumder`):** Implement `src/cowic/analysis/plotter.py`.
+- **Task 4.2 (`upayanmazumder`):** Implement `src/cowic/analysis/plotter.py` (Issue #10, Completed).
   - Deliverable: Generate evaluation figures reproducing Figures 11, 14, and 16.
   - Verification: Rendered figures stored in `figures/`.
-
+- **Task 4.3 (`Nitesh050`):** Implement MILP hard-constraint scheduler variant for Exp 5 (Issue #20).
+  - Deliverable: `HardConstraintMILPScheduler` in `src/cowic/wifi/milp_scheduler.py`.
+  - Verification: `SimulationEngine` runs `configs/exp5_rigid_vacate.yaml` without error.
 ### Milestone 5 (Evening: 18:30 – 20:00) — Final QA and Delivery
 - Execute complete test suite with coverage report: `pytest --cov=src/cowic`.
 - Execute static analysis checks: `ruff check .` and `mypy src/ tests/`.
