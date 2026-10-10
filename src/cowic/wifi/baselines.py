@@ -14,6 +14,12 @@ the simulation engine can drive every experiment through one interface.
 
 No baseline reserves a sensing window, so it is reported as an empty interval
 at the start of the cycle.
+
+When driving these schedulers cycle-by-cycle from :func:`traces.playback.
+iter_cycles`, pass ``(*cycle.frame_groups, *cycle.active_carryover)``, not
+``cycle.frame_groups`` alone: a FG owned by an earlier cycle can still be
+transmitting at this cycle's start, and every function below infers "idle"
+purely from the FGs it is given.
 """
 
 import time
