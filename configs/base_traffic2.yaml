@@ -1,0 +1,8 @@
+name: "Traffic_II_Medium_High_Load"
+description: "Busy WiFi traffic profile with roughly 70 percent channel occupancy"
+avg_fg_duration_ms: 23.7
+avg_whitespace_ms: 9.2
+qos_sensitive_ratio: 0.107
+non_realtime_ratio: 0.705
+avg_delay_bound_ms: 146.2
+postpone_bounds_ms: [50, 100, 150, 200]
