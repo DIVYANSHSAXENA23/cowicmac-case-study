@@ -1,0 +1,8 @@
+name: "Traffic_IV_Light_Load"
+description: "Light WiFi traffic profile with long natural whitespaces"
+avg_fg_duration_ms: 25.8
+avg_whitespace_ms: 142.3
+qos_sensitive_ratio: 0.452
+non_realtime_ratio: 0.397
+avg_delay_bound_ms: 102.1
+postpone_bounds_ms: [50, 100, 150, 200]
