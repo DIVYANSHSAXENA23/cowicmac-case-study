@@ -19,8 +19,26 @@ non-adaptive superframe (``"fixed"``). A fixed superframe is never resized,
 but when CTC delivers a WBeacon (Exp 2/3/5) it starts at the announced
 window, since those schemes notify ZigBee where to transmit; without CTC
 (Exp 1) it stays anchored at the cycle start.
+
+Known accepted limitation: registered WiFi/ZigBee transmission
+timestamps are always relative to each cycle's nominal
+``cycle.start_ms``/``cycle.end_ms`` boundaries, not to ``env.now`` at the
+moment of registration. When ``ctc_delay_ms`` (compounded by retries) is
+large relative to a cycle's own slot widths, the SimPy clock can advance
+past a packet's nominal start time before that packet is registered,
+and - in extreme cases - past a later cycle's nominal start before that
+cycle begins processing. :class:`~cowic.sim.channel_medium.ChannelMedium`
+is a pure post-hoc interval-overlap detector (it does not consult
+``env.now``), so the recorded intervals themselves remain internally
+consistent; only the SimPy clock's role as a faithful wall-clock
+pacing signal degrades under this condition. None of the six
+experiment configs approach it (``ctc_delay_ms`` defaults to 0.1 ms,
+far below any slot width); fully decoupling event timestamps from
+nominal cycle boundaries would require a larger redesign, out of scope
+here.
 """
 
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -132,7 +150,10 @@ class SimulationConfig:
         seed = int(raw.get("random_seed", 42))
         duration_s = float(raw["duration_s"])
         profile_stem = Path(raw["traffic_profile"]).stem
-        trace_path = trace_dir / f"{raw['experiment_id']}_{profile_stem}_{seed}.parquet"
+        trace_path = (
+            trace_dir
+            / f"{raw['experiment_id']}_{profile_stem}_{duration_s:g}s_{seed}.parquet"
+        )
         if not trace_path.exists():
             generate_trace(raw["traffic_profile"], duration_s, trace_path, seed)
 
@@ -408,6 +429,7 @@ class SimulationEngine:
             per=config.ctc_per,
             delay_ms=config.ctc_delay_ms,
             max_retries=config.ctc_max_retries,
+            rng=random.Random(config.random_seed),
         )
         ap = APOrchestrator(
             ctc=ctc,
@@ -509,6 +531,8 @@ class SimulationEngine:
             for packet in _synthesize_zigbee_packets(
                 superframe, cycle.index, zc.lwsa.desired_packet_duration_ms
             ):
+                if packet.start_time_ms >= horizon_ms:
+                    continue
                 stats.zigbee_packets_attempted += 1
                 medium.register_transmission(
                     f"zigbee-{cycle.index}-{packet.packet_id}",

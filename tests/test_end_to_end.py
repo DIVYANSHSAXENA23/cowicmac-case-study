@@ -314,13 +314,12 @@ def test_exp2_fixed_superframe_follows_announced_gap(short_trace: Path) -> None:
     r1, r2 = exp1.run(), exp2.run()
 
     beacon_slot = 0.96 * 4
-    assert all(
-        start == pytest.approx(beacon_slot)
-        for start in _first_zigbee_start_per_cycle(exp1)
-    )
-    assert any(
-        start > beacon_slot + 1e-6 for start in _first_zigbee_start_per_cycle(exp2)
-    )
+    exp1_starts = _first_zigbee_start_per_cycle(exp1)
+    exp2_starts = _first_zigbee_start_per_cycle(exp2)
+    assert exp1_starts
+    assert exp2_starts
+    assert all(start == pytest.approx(beacon_slot) for start in exp1_starts)
+    assert any(start > beacon_slot + 1e-6 for start in exp2_starts)
     assert r2["zigbee_success_count"] > r1["zigbee_success_count"]
 
 
@@ -334,10 +333,9 @@ def test_fixed_superframe_without_wbeacon_stays_at_cycle_start(
         )
     )
     lost.run()
-    assert all(
-        start == pytest.approx(0.96 * 4)
-        for start in _first_zigbee_start_per_cycle(lost)
-    )
+    starts = _first_zigbee_start_per_cycle(lost)
+    assert starts
+    assert all(start == pytest.approx(0.96 * 4) for start in starts)
 
 
 def test_exp6_without_zbeacon_still_serves_zigbee(short_trace: Path) -> None:
