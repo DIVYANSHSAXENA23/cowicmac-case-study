@@ -9,7 +9,9 @@ Each scheduling cycle walks the AP through a fixed sequence of states:
    was lost, the last known demand is reused.
 2. RESCHEDULING: ask the scheduler (the MILP) for a schedule. If no scheduler
    is configured, it raises a ``CoWiCError``, or it returns a non-optimal
-   status, fall back to whitespace expansion.
+   status, fall back to whitespace expansion. FGs carried over from earlier
+   cycles are still on air at the cycle start; they are never moved, and
+   rescheduling starts only once they have finished.
 3. CTC_NOTIFYING: broadcast the reserved windows in a WBeacon.
 4. TRANSMITTING: hand the WiFi decisions to the simulation.
 
@@ -26,7 +28,7 @@ from typing import Protocol
 
 from cowic.ctc.channel import CTCMessage, MessageType
 from cowic.exceptions import ConfigurationError, CoWiCError, ProtocolError
-from cowic.models.frame_group import FrameGroup
+from cowic.models.frame_group import FrameGroup, SchedulingDecision
 from cowic.wifi.fallback import fallback_whitespace_expansion
 from cowic.wifi.milp_scheduler import ScheduleResult
 
@@ -40,6 +42,7 @@ WBEACON_KEYS = (
 )
 
 OPTIMAL_STATUSES = frozenset({"Optimal"})  # pulp.LpStatus[pulp.LpStatusOptimal]
+CARRYOVER_BUSY_STATUS = "carryover_busy"  # Carryover FGs fill the whole cycle.
 
 
 class APState(Enum):
@@ -121,6 +124,7 @@ class APOrchestrator:
         t_start_ms: float,
         t_end_ms: float,
         zbeacon: CTCMessage | None,
+        carryover: Sequence[FrameGroup] = (),
     ) -> CycleOutcome:
         """Execute one scheduling cycle at the AP.
 
@@ -130,6 +134,11 @@ class APOrchestrator:
             t_end_ms: Cycle end.
             zbeacon: The ZBeacon delivered by CTC this cycle, or ``None`` if it
                 was lost or the ZC sent none.
+            carryover: FGs owned by earlier cycles that are still transmitting
+                at ``t_start_ms`` (``TraceCycle.active_carryover``). They have
+                already started, so they are not rescheduled; the scheduler
+                and fallback only see airtime after the last one ends, so no
+                ZigBee window is announced over them.
 
         If any step raises, the AP is restored to ``MAINTAINING`` before the
         exception propagates, so one malformed ZBeacon, scheduler bug, or CTC
@@ -144,7 +153,9 @@ class APOrchestrator:
                 f"Cycle end {t_end_ms} must be after cycle start {t_start_ms}"
             )
         try:
-            return self._run_cycle(frame_groups, t_start_ms, t_end_ms, zbeacon)
+            return self._run_cycle(
+                frame_groups, t_start_ms, t_end_ms, zbeacon, carryover
+            )
         except Exception:
             self.state = APState.MAINTAINING
             self.history.append(APState.MAINTAINING)
@@ -156,15 +167,23 @@ class APOrchestrator:
         t_start_ms: float,
         t_end_ms: float,
         zbeacon: CTCMessage | None,
+        carryover: Sequence[FrameGroup],
     ) -> CycleOutcome:
         self._advance(APState.CTC_GATHERING)
         if zbeacon is not None:
             self.demand_ms = _read_demand(zbeacon)
 
         self._advance(APState.RESCHEDULING)
-        schedule, used_fallback = self._reschedule(
-            list(frame_groups), t_start_ms, t_end_ms
+        busy_until = max(
+            (fg.original_start_ms + fg.duration_ms for fg in carryover),
+            default=t_start_ms,
         )
+        if busy_until >= t_end_ms:
+            schedule, used_fallback = _carryover_busy(frame_groups, t_end_ms), False
+        else:
+            schedule, used_fallback = self._reschedule(
+                list(frame_groups), max(t_start_ms, busy_until), t_end_ms
+            )
 
         self._advance(APState.CTC_NOTIFYING)
         wbeacon = self._wbeacon(schedule, t_start_ms)
@@ -229,6 +248,29 @@ class APOrchestrator:
                 )
             ),
         )
+
+
+def _carryover_busy(
+    frame_groups: Sequence[FrameGroup], t_end_ms: float
+) -> ScheduleResult:
+    """No airtime is free this cycle: grant no windows and move nothing."""
+    return ScheduleResult(
+        decisions=[
+            SchedulingDecision(
+                fg_id=fg.fg_id,
+                scheduled_start_ms=fg.original_start_ms,
+                is_postponed=False,
+                delay_ms=0.0,
+            )
+            for fg in frame_groups
+        ],
+        t_free_start_ms=t_end_ms,
+        t_free_end_ms=t_end_ms,
+        t_sense_start_ms=t_end_ms,
+        t_sense_end_ms=t_end_ms,
+        solver_status=CARRYOVER_BUSY_STATUS,
+        solve_time_ms=0.0,
+    )
 
 
 def _read_demand(zbeacon: CTCMessage) -> float:
