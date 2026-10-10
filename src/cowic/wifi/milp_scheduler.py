@@ -54,10 +54,25 @@ def _big_m(
     horizon_ms: float,
     d_free_ms: float,
     d_sensing_ms: float,
+    t_start_ms: float,
+    t_end_ms: float,
 ) -> float:
-    """A constraint-loosening constant larger than any feasible time gap."""
+    """A constraint-loosening constant larger than any feasible time gap.
+
+    ``horizon_ms`` alone is not enough: Eq. 14's postponement-feasibility
+    constraints compare each FG's absolute ``deadline_ms``/``arrival_time_ms``
+    against ``t_start_ms``/``t_end_ms``. A single "stale" FG (e.g. a
+    carryover whose deadline sits well before this cycle) can otherwise
+    make its own relaxed-by-M constraint still bind, forcing infeasibility
+    for the whole model rather than just that one FG.
+    """
     max_duration = max((fg.duration_ms for fg in frame_groups), default=0.0)
-    return horizon_ms + max_duration + max(d_free_ms, d_sensing_ms) + 1.0
+    deadline_gap = max((t_end_ms - fg.deadline_ms for fg in frame_groups), default=0.0)
+    arrival_gap = max(
+        (fg.arrival_time_ms - t_start_ms for fg in frame_groups), default=0.0
+    )
+    stale_extra = max(0.0, deadline_gap, arrival_gap)
+    return horizon_ms + max_duration + max(d_free_ms, d_sensing_ms) + stale_extra + 1.0
 
 
 def _postponement_cost(fg: FrameGroup, t_end_ms: float, mu_base: float) -> float:
@@ -125,7 +140,9 @@ class MILPScheduler:
             )
 
         horizon_ms = t_end_ms - t_start_ms
-        big_m = _big_m(frame_groups, horizon_ms, d_free_ms, d_sensing_ms)
+        big_m = _big_m(
+            frame_groups, horizon_ms, d_free_ms, d_sensing_ms, t_start_ms, t_end_ms
+        )
 
         prob = pulp.LpProblem("WiFi_FG_Rescheduling", pulp.LpMinimize)
 
@@ -252,6 +269,19 @@ class MILPScheduler:
         prob.solve(solver)
         status = pulp.LpStatus[prob.status]
 
+        if status != "Optimal":
+            # .value() can be None for every variable here (Infeasible, or
+            # CBC hit time_limit_s before finding a solution: "Not Solved").
+            # Silently falling back to each FG's original_start_ms and a
+            # window collapsed to t_start_ms would look like a normal,
+            # successful result and could overlap the sensing window,
+            # breaking the hard Eq. 17 guarantee for a caller that doesn't
+            # check solver_status. Claim nothing instead: every FG is
+            # postponed and no window is reserved.
+            return self._no_solution_result(
+                frame_groups, t_start_ms, t_end_ms, status, began
+            )
+
         free_start_val = t_free_start.value()
         sense_start_val = t_sense_start.value()
         resolved_free_start = (
@@ -272,6 +302,41 @@ class MILPScheduler:
             t_free_end_ms=resolved_free_start + d_free_ms,
             t_sense_start_ms=resolved_sense_start,
             t_sense_end_ms=resolved_sense_start + d_sensing_ms,
+            solver_status=status,
+            solve_time_ms=(time.perf_counter() - began) * 1000.0,
+        )
+
+    @staticmethod
+    def _no_solution_result(
+        frame_groups: list[FrameGroup],
+        t_start_ms: float,
+        t_end_ms: float,
+        status: str,
+        began: float,
+    ) -> ScheduleResult:
+        """Safe result when the solver found no usable solution.
+
+        Every FG is reported postponed (never silently kept at its
+        original, possibly sensing-window-violating position) and no
+        window is reserved, so a caller that doesn't check
+        ``solver_status`` still can't send WiFi traffic into a window that
+        was never actually solved for.
+        """
+        decisions = [
+            SchedulingDecision(
+                fg_id=fg.fg_id,
+                scheduled_start_ms=t_end_ms,
+                is_postponed=True,
+                delay_ms=t_end_ms - fg.original_start_ms,
+            )
+            for fg in frame_groups
+        ]
+        return ScheduleResult(
+            decisions=decisions,
+            t_free_start_ms=t_start_ms,
+            t_free_end_ms=t_start_ms,
+            t_sense_start_ms=t_start_ms,
+            t_sense_end_ms=t_start_ms,
             solver_status=status,
             solve_time_ms=(time.perf_counter() - began) * 1000.0,
         )

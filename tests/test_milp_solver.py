@@ -178,3 +178,38 @@ def test_schedule_respects_minimum_delay_for_moved_fg() -> None:
     expected_delay = max(0.0, decision.scheduled_start_ms - 0.0)
     assert decision.delay_ms == expected_delay
     assert decision.delay_ms >= 0.0
+
+
+def test_schedule_stale_fg_does_not_corrupt_big_m() -> None:
+    """A FG whose deadline sits far outside the horizon doesn't need a
+    looser Big-M than the model provides; this FG is genuinely infeasible
+    either way (its deadline has effectively already passed), but the
+    scheduler must still terminate cleanly and report it, rather than
+    silently mis-relaxing an unrelated constraint."""
+    scheduler = MILPScheduler()
+    stale = _fg(1, start=1010.0, duration=10.0, deadline=5.0, arrival=0.0)
+    result = scheduler.schedule(
+        [stale], d_free_ms=0.0, d_sensing_ms=0.0, t_start_ms=1000.0, t_end_ms=1100.0
+    )
+    assert result.solver_status == "Infeasible"
+    assert result.decisions[0].is_postponed is True
+
+
+def test_schedule_infeasible_problem_reports_all_postponed_with_no_window() -> None:
+    """A non-Optimal status must never silently report FGs at their
+    original position with a seemingly-valid window: both could overlap
+    the sensing window, breaking the hard Eq. 17 guarantee for a caller
+    that only checks the schedule, not solver_status."""
+    scheduler = MILPScheduler()
+    # Duration 50ms but only 20ms between arrival and deadline: impossible
+    # to schedule now, and the deadline has already passed by t_end_ms, so
+    # it cannot be postponed either.
+    impossible = _fg(1, start=10.0, duration=50.0, deadline=20.0, arrival=0.0)
+    result = scheduler.schedule(
+        [impossible], d_free_ms=0.0, d_sensing_ms=0.0, t_start_ms=0.0, t_end_ms=100.0
+    )
+    assert result.solver_status != "Optimal"
+    assert result.t_free_start_ms == result.t_free_end_ms
+    assert result.t_sense_start_ms == result.t_sense_end_ms
+    (decision,) = result.decisions
+    assert decision.is_postponed is True
