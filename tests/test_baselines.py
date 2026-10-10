@@ -96,10 +96,13 @@ def test_opportunistic_no_idle_time() -> None:
 def test_window_never_overlaps_wifi_on_real_trace() -> None:
     fgs = frame_groups_from_frame(build_trace(load_profile("Traffic_I"), 10.0))
     for cycle in iter_cycles(fgs, cycle_ms=1000.0):
-        result = schedule_opportunistic(fgs, cycle.start_ms, cycle.end_ms, 62.0)
+        # Realistic per-cycle driving: the cycle's own FGs plus any FG
+        # carried over from an earlier cycle that is still transmitting.
+        visible = (*cycle.frame_groups, *cycle.active_carryover)
+        result = schedule_opportunistic(visible, cycle.start_ms, cycle.end_ms, 62.0)
         start, end = result.t_free_start_ms, result.t_free_end_ms
         assert cycle.start_ms <= start <= end <= cycle.end_ms
-        for fg in fgs:
+        for fg in visible:
             fg_end = fg.original_start_ms + fg.duration_ms
             assert fg_end <= start or fg.original_start_ms >= end
 
@@ -201,6 +204,14 @@ def test_ecc_preserves_input_order() -> None:
 
 @pytest.mark.parametrize("profile", ["Traffic_I", "Traffic_III"])
 def test_ecc_invariants_on_real_trace(profile: str) -> None:
+    # Unlike Exp 2's gap search, ECC's window position (fixed at the cycle
+    # start, Section 5.3.1) never depends on frame_groups, and an FG carried
+    # over from an earlier cycle already started in the past: it cannot be
+    # deferred to a new time without contradicting its real (already-fixed)
+    # schedule. So, unlike schedule_opportunistic, members here is correctly
+    # just this cycle's own FGs (cycle.frame_groups) - see #13 review notes
+    # on why schedule_ecc is not exposed to the same active_carryover bug
+    # that affected schedule_opportunistic.
     fgs = frame_groups_from_frame(build_trace(load_profile(profile), 10.0))
     for cycle in iter_cycles(fgs, cycle_ms=1000.0):
         members = list(cycle.frame_groups)
