@@ -123,16 +123,54 @@ def schedule_ecc(
 
     WiFi FGs that collide with the window are deferred as described in
     :func:`defer_around_window`.
+
+    A FG carried over from an earlier cycle (``original_start_ms <
+    t_start_ms``, still transmitting at ``t_start_ms``) already started: it
+    cannot be deferred or postponed without contradicting its real,
+    already-decided schedule. Its original decision is preserved unchanged,
+    and the channel is treated as busy until it ends. Since a legacy NAV
+    reservation cannot retroactively silence a transmission already in
+    progress, the fixed cycle-start NAV is suppressed entirely (reported as
+    an empty window) whenever any carryover is active at ``t_start_ms``.
     """
     _check_cycle(t_start_ms, t_end_ms)
     _check_demand(d_free_ms)
     if nav_limit_ms <= 0:
         raise ConfigurationError(f"nav_limit_ms must be positive, got {nav_limit_ms}")
     began = time.perf_counter()
-    window_end = t_start_ms + min(d_free_ms, nav_limit_ms, t_end_ms - t_start_ms)
+
+    carryover_ids = {
+        fg.fg_id
+        for fg in frame_groups
+        if fg.original_start_ms < t_start_ms
+        and fg.original_start_ms + fg.duration_ms > t_start_ms
+    }
+    if carryover_ids:
+        window_end = t_start_ms
+    else:
+        window_end = t_start_ms + min(d_free_ms, nav_limit_ms, t_end_ms - t_start_ms)
+
+    carryover_end = max(
+        (
+            fg.original_start_ms + fg.duration_ms
+            for fg in frame_groups
+            if fg.fg_id in carryover_ids
+        ),
+        default=-math.inf,
+    )
+    by_id: dict[int, SchedulingDecision] = {
+        fg.fg_id: _decision(fg, fg.original_start_ms, postponed=False)
+        for fg in frame_groups
+        if fg.fg_id in carryover_ids
+    }
+    deferrable = [fg for fg in frame_groups if fg.fg_id not in carryover_ids]
+    for decision in defer_around_window(
+        deferrable, t_start_ms, window_end, t_end_ms, channel_free_at=carryover_end
+    ):
+        by_id[decision.fg_id] = decision
 
     return _result(
-        defer_around_window(frame_groups, t_start_ms, window_end, t_end_ms),
+        [by_id[fg.fg_id] for fg in frame_groups],
         free=(t_start_ms, window_end),
         t_start_ms=t_start_ms,
         status="ecc_nav",
@@ -145,6 +183,7 @@ def defer_around_window(
     window_start_ms: float,
     window_end_ms: float,
     t_end_ms: float,
+    channel_free_at: float = -math.inf,
 ) -> list[SchedulingDecision]:
     """Defer FGs that would overlap ``[window_start_ms, window_end_ms]``.
 
@@ -154,9 +193,12 @@ def defer_around_window(
     would then finish after its deadline or after ``t_end_ms`` is postponed to
     the next cycle: it is reported at ``t_end_ms`` with ``is_postponed=True``
     and does not occupy airtime in this cycle. Decisions follow input order.
+
+    ``channel_free_at`` seeds the serialization cursor, for airtime already
+    occupied before any FG in ``frame_groups`` (e.g. a carried-over FG the
+    caller is tracking separately and has excluded from this list).
     """
     by_id: dict[int, SchedulingDecision] = {}
-    channel_free_at = -math.inf
     for fg in sorted(frame_groups, key=lambda fg: fg.original_start_ms):
         start = max(fg.original_start_ms, channel_free_at)
         overlaps = start < window_end_ms and start + fg.duration_ms > window_start_ms
