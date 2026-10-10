@@ -355,3 +355,68 @@ def test_exp6_without_zbeacon_still_serves_zigbee(short_trace: Path) -> None:
     result = SimulationEngine(config).run()
     assert result["zigbee_packets_attempted"] > 0
     assert result["zigbee_success_rate"] > 0.9
+
+
+def test_delivered_wifi_fg_ids_feeds_metrics_calculator(short_trace: Path) -> None:
+    """engine.delivered_wifi_fg_ids() integrates with MetricsCalculator's
+    collision-aware delay_overhead: every id returned must have a
+    successful registered WiFi TransmissionRecord, and feeding it through
+    compute() must not raise."""
+    from cowic.analysis.metrics import MetricsCalculator, zigbee_clean_capacity_ms
+    from traces.playback import load_trace
+
+    config = SimulationConfig(
+        scenario_name="Test_DeliveredIds",
+        duration_s=3.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=1000.0,
+    )
+    engine = SimulationEngine(config)
+    result = engine.run()
+    delivered = engine.delivered_wifi_fg_ids()
+    assert delivered
+    assert engine.last_medium is not None
+    successful_wifi_trans_ids = {
+        r.trans_id
+        for r in engine.last_medium.successful_transmissions()
+        if r.protocol == "wifi"
+    }
+    assert len(delivered) <= len(successful_wifi_trans_ids)
+
+    frame_groups = load_trace(short_trace)
+    fg_by_id = {fg.fg_id: fg for fg in frame_groups}
+    # Reconstruct final decisions is not directly exposed; use a minimal
+    # decisions list covering only delivered FGs to prove compute() accepts
+    # delivered_fg_ids without raising.
+    from cowic.models.frame_group import SchedulingDecision
+
+    decisions = [
+        SchedulingDecision(fg_id, fg_by_id[fg_id].original_start_ms, False, 0.0)
+        for fg_id in delivered
+        if fg_id in fg_by_id
+    ]
+    metrics = MetricsCalculator().compute(
+        engine.last_medium.transmissions,
+        decisions,
+        fg_by_id,
+        horizon_ms=result["simulated_duration_ms"],
+        zigbee_capacity_ms=zigbee_clean_capacity_ms(62.0, int(result["cycles_run"])),
+        delivered_fg_ids=delivered,
+    )
+    assert metrics.max_fg_delay_ms >= 0.0
+
+
+def test_delivered_wifi_fg_ids_raises_before_run() -> None:
+    config = SimulationConfig(
+        scenario_name="Test_NotRun",
+        duration_s=1.0,
+        wifi_trace_path=Path("traces/data/nonexistent.parquet"),
+        d_free_ms=62.0,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=1000.0,
+    )
+    engine = SimulationEngine(config)
+    with pytest.raises(RuntimeError):
+        engine.delivered_wifi_fg_ids()

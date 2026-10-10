@@ -403,6 +403,7 @@ class SimulationEngine:
         """Store ``config``; ``run()`` does all the actual work."""
         self.config = config
         self.last_medium: ChannelMedium | None = None
+        self._wifi_fg_id_by_trans_id: dict[str, int] = {}
 
     def run(self) -> dict[str, float]:
         """Execute the discrete-event simulation scenario.
@@ -445,6 +446,7 @@ class SimulationEngine:
         lwsa = LWSAAdapter()
         zc = ZigBeeCoordinator(lwsa=lwsa)
         stats = _RunStats()
+        self._wifi_fg_id_by_trans_id = {}
 
         env = simpy.Environment()
         env.process(
@@ -456,6 +458,23 @@ class SimulationEngine:
 
         self.last_medium = medium
         return stats.finalize(medium, horizon_ms)
+
+    def delivered_wifi_fg_ids(self) -> set[int]:
+        """``fg_id``s whose registered WiFi transmission ultimately
+        succeeded, from the most recent :meth:`run`. For
+        :meth:`~cowic.analysis.metrics.MetricsCalculator.compute`'s
+        ``delivered_fg_ids`` parameter.
+
+        Raises:
+            RuntimeError: if called before :meth:`run`.
+        """
+        if self.last_medium is None:
+            raise RuntimeError("delivered_wifi_fg_ids() called before run()")
+        return {
+            self._wifi_fg_id_by_trans_id[record.trans_id]
+            for record in self.last_medium.successful_transmissions()
+            if record.trans_id in self._wifi_fg_id_by_trans_id
+        }
 
     def _drive_cycles(
         self,
@@ -502,8 +521,10 @@ class SimulationEngine:
 
             for decision in outcome.schedule.decisions:
                 fg = fg_by_id[decision.fg_id]
+                trans_id = f"wifi-{cycle.index}-{decision.fg_id}"
+                self._wifi_fg_id_by_trans_id[trans_id] = decision.fg_id
                 medium.register_transmission(
-                    f"wifi-{cycle.index}-{decision.fg_id}",
+                    trans_id,
                     "wifi",
                     decision.scheduled_start_ms,
                     fg.duration_ms,
