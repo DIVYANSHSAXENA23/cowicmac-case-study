@@ -5,6 +5,7 @@ A trace written by :mod:`traces.synthetic_generator` is loaded as immutable
 fixed-length AP scheduling cycles.
 """
 
+import math
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,6 +108,9 @@ def iter_cycles(
 
 
 def _validate(fg: FrameGroup) -> None:
+    values = (fg.arrival_time_ms, fg.duration_ms, fg.deadline_ms, fg.original_start_ms)
+    if not all(math.isfinite(v) for v in values):
+        raise TraceError(f"FG {fg.fg_id}: timing fields must be finite")
     if fg.duration_ms <= 0:
         raise TraceError(f"FG {fg.fg_id}: duration must be positive")
     if fg.arrival_time_ms > fg.original_start_ms:

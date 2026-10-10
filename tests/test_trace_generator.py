@@ -133,6 +133,10 @@ def test_profile_yaml_errors(tmp_path: Path) -> None:
     bad.write_text("name: x\npostpone_bounds_ms: [50, 100]\n")
     with pytest.raises(ConfigurationError):
         load_profile(str(bad))
+    malformed = tmp_path / "malformed.yaml"
+    malformed.write_text("name: x\npostpone_bounds_ms: [50, 100, 150, 200\n")
+    with pytest.raises(ConfigurationError):
+        load_profile(str(malformed))
 
 
 def test_generate_and_load_round_trip(tmp_path: Path) -> None:
@@ -183,6 +187,9 @@ def _row(**overrides: object) -> dict[str, object]:
         [_row(duration_ms=0.0)],
         [_row(arrival_time_ms=1.0)],
         [_row(deadline_ms=2.0)],
+        [_row(deadline_ms=float("nan"))],
+        [_row(original_start_ms=float("nan"))],
+        [_row(duration_ms=float("inf"))],
     ],
 )
 def test_malformed_trace_rejected(rows: list[dict[str, object]]) -> None:
