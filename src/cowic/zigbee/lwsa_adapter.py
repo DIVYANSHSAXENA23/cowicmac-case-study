@@ -229,36 +229,43 @@ class LWSAAdapter:
         cap_region_start_ms = beacon_offset_ms + slot_duration_ms
         best: _Candidate | None = None
         for j in range(0, min(MAX_CFP_SLOTS, max_active) + 1):
-            i = max_active - j
-            if i < 0 or i + j > MAX_ACTIVE_SLOTS:
-                continue
-            m = _count_clear_slots(
-                i,
-                cap_region_start_ms,
-                slot_duration_ms,
-                min_cap_interval_ms,
-                residual_wifi_fragments,
-            )
-            cfp_region_start_ms = cap_region_start_ms + i * slot_duration_ms
-            n = _count_clear_slots(
-                j,
-                cfp_region_start_ms,
-                slot_duration_ms,
-                slot_duration_ms,
-                residual_wifi_fragments,
-            )
-            efficiency = (
-                m * min_cap_interval_ms * eta_cap
-                + self.alpha * n * slot_duration_ms * eta_cfp
-            )
-            if best is None or efficiency > best.efficiency:
-                best = _Candidate(
-                    slot_duration_ms=slot_duration_ms,
-                    cap_slots=i,
-                    cfp_slots=j,
-                    beacon_offset_ms=beacon_offset_ms,
-                    efficiency=efficiency,
+            max_i = min(max_active - j, MAX_ACTIVE_SLOTS - j)
+            for i in range(0, max_i + 1):
+                m = _count_clear_slots(
+                    i,
+                    cap_region_start_ms,
+                    slot_duration_ms,
+                    min_cap_interval_ms,
+                    residual_wifi_fragments,
                 )
+                cfp_region_start_ms = cap_region_start_ms + i * slot_duration_ms
+                n = _count_clear_slots(
+                    j,
+                    cfp_region_start_ms,
+                    slot_duration_ms,
+                    slot_duration_ms,
+                    residual_wifi_fragments,
+                )
+                efficiency = (
+                    m * min_cap_interval_ms * eta_cap
+                    + self.alpha * n * slot_duration_ms * eta_cfp
+                )
+                is_better = (
+                    best is None
+                    or efficiency > best.efficiency
+                    or (
+                        efficiency == best.efficiency
+                        and i + j < best.cap_slots + best.cfp_slots
+                    )
+                )
+                if is_better:
+                    best = _Candidate(
+                        slot_duration_ms=slot_duration_ms,
+                        cap_slots=i,
+                        cfp_slots=j,
+                        beacon_offset_ms=beacon_offset_ms,
+                        efficiency=efficiency,
+                    )
         return best
 
     @staticmethod

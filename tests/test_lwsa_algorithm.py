@@ -104,6 +104,19 @@ def test_adapt_superframe_never_schedules_beacon_inside_fragment() -> None:
     )
 
 
+def test_adapt_superframe_avoids_reserving_trailing_blocked_slots() -> None:
+    """When WiFi blocks only the tail of the window, the search must not
+    pad the allocation with slots it already knows are unusable
+    (regression: _best_slot_split used to always fix i + j == max_active)."""
+    adapter = LWSAAdapter()
+    config = adapter.adapt_superframe(0.0, 20.0, [(15.0, 20.0)])
+    total_active_end_ms = (
+        config.beacon_offset_ms
+        + (1 + config.cap_slots + config.cfp_slots) * config.slot_duration_ms
+    )
+    assert total_active_end_ms <= 15.0 + 1e-9
+
+
 def test_packet_duration_capped_by_slot_and_hardware() -> None:
     """t_pk (Eq. 8) never exceeds the slot width minus turnaround/ack."""
     small_slot = BASE_SLOT_DURATION_MS  # 0.96 ms
