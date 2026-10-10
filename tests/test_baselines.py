@@ -1,4 +1,4 @@
-"""Tests for the Exp 1 and Exp 2 baseline schedulers."""
+"""Tests for the Exp 1, Exp 2 and Exp 3 baseline schedulers."""
 
 import pytest
 
@@ -6,6 +6,7 @@ from cowic.exceptions import ConfigurationError
 from cowic.models.frame_group import FrameGroup
 from cowic.wifi.baselines import (
     find_whitespaces,
+    schedule_ecc,
     schedule_opportunistic,
     schedule_uncoordinated,
 )
@@ -13,12 +14,12 @@ from traces.playback import frame_groups_from_frame, iter_cycles
 from traces.synthetic_generator import build_trace, load_profile
 
 
-def _fg(fg_id: int, start: float, duration: float) -> FrameGroup:
+def _fg(fg_id: int, start: float, duration: float, bound: float = 100.0) -> FrameGroup:
     return FrameGroup(
         fg_id=fg_id,
         arrival_time_ms=start,
         duration_ms=duration,
-        deadline_ms=start + duration + 100.0,
+        deadline_ms=start + duration + bound,
         original_start_ms=start,
         qos_sensitive=False,
     )
@@ -110,3 +111,122 @@ def test_invalid_inputs() -> None:
         schedule_uncoordinated(FGS, 10.0, 0.0)
     with pytest.raises(ConfigurationError):
         schedule_opportunistic(FGS, 0.0, 100.0, d_free_ms=-1.0)
+
+
+def _starts(fgs: list[FrameGroup], d_free: float) -> dict[int, float]:
+    result = schedule_ecc(fgs, 0.0, 200.0, d_free_ms=d_free)
+    return {d.fg_id: d.scheduled_start_ms for d in result.decisions}
+
+
+@pytest.mark.parametrize(
+    ("d_free", "expected_end"), [(31.0, 31.0), (62.0, 40.0), (123.0, 40.0)]
+)
+def test_ecc_window_capped_by_nav(d_free: float, expected_end: float) -> None:
+    result = schedule_ecc([], 0.0, 200.0, d_free_ms=d_free)
+    assert (result.t_free_start_ms, result.t_free_end_ms) == (0.0, expected_end)
+    assert result.solver_status == "ecc_nav"
+    assert result.t_sense_end_ms == result.t_sense_start_ms
+
+
+def test_ecc_window_capped_by_cycle() -> None:
+    result = schedule_ecc([], 0.0, 25.0, d_free_ms=62.0)
+    assert result.t_free_end_ms == 25.0
+
+
+def test_ecc_window_position_is_fixed() -> None:
+    # Unlike Exp 2, ECC ignores where natural whitespace is.
+    result = schedule_ecc([_fg(1, 0.0, 10.0)], 100.0, 300.0, d_free_ms=31.0)
+    assert (result.t_free_start_ms, result.t_free_end_ms) == (100.0, 131.0)
+
+
+def test_ecc_defers_overlapping_fg_to_window_end() -> None:
+    result = schedule_ecc([_fg(1, 10.0, 5.0)], 0.0, 200.0, d_free_ms=31.0)
+    (decision,) = result.decisions
+    assert decision.scheduled_start_ms == 31.0
+    assert decision.delay_ms == 21.0
+    assert not decision.is_postponed
+
+
+def test_ecc_keeps_fg_outside_window() -> None:
+    result = schedule_ecc([_fg(1, 50.0, 5.0)], 0.0, 200.0, d_free_ms=31.0)
+    (decision,) = result.decisions
+    assert decision.scheduled_start_ms == 50.0
+    assert decision.delay_ms == 0.0
+
+
+def test_ecc_fg_straddling_window_end_is_deferred() -> None:
+    assert _starts([_fg(1, 25.0, 10.0)], 31.0) == {1: 31.0}
+
+
+def test_ecc_deferred_fgs_queue_back_to_back() -> None:
+    fgs = [_fg(1, 5.0, 10.0), _fg(2, 20.0, 10.0), _fg(3, 45.0, 10.0)]
+    # 1 -> [31, 41], 2 -> [41, 51], 3 pushed by 2 -> [51, 61].
+    assert _starts(fgs, 31.0) == {1: 31.0, 2: 41.0, 3: 51.0}
+
+
+def test_ecc_postpones_fg_missing_deadline() -> None:
+    fgs = [_fg(1, 10.0, 5.0, bound=10.0), _fg(2, 20.0, 5.0)]
+    result = schedule_ecc(fgs, 0.0, 200.0, d_free_ms=31.0)
+    first, second = result.decisions
+    assert first.is_postponed
+    assert first.scheduled_start_ms == 200.0
+    assert first.delay_ms == 190.0
+    # The postponed FG does not block the channel.
+    assert not second.is_postponed
+    assert second.scheduled_start_ms == 31.0
+
+
+def test_ecc_postpones_fg_overflowing_cycle() -> None:
+    result = schedule_ecc([_fg(1, 30.0, 20.0)], 0.0, 50.0, d_free_ms=40.0)
+    assert result.decisions[0].is_postponed
+
+
+def test_ecc_preserves_input_order() -> None:
+    fgs = [_fg(2, 60.0, 5.0), _fg(1, 10.0, 5.0)]
+    result = schedule_ecc(fgs, 0.0, 200.0, d_free_ms=31.0)
+    assert [d.fg_id for d in result.decisions] == [2, 1]
+
+
+@pytest.mark.parametrize("profile", ["Traffic_I", "Traffic_III"])
+def test_ecc_invariants_on_real_trace(profile: str) -> None:
+    fgs = frame_groups_from_frame(build_trace(load_profile(profile), 10.0))
+    for cycle in iter_cycles(fgs, cycle_ms=1000.0):
+        members = list(cycle.frame_groups)
+        result = schedule_ecc(members, cycle.start_ms, cycle.end_ms, 62.0)
+        assert result.t_free_end_ms - result.t_free_start_ms == 40.0
+        assert len(result.decisions) == len(members)
+
+        by_id = {fg.fg_id: fg for fg in members}
+        kept = sorted(
+            (d.scheduled_start_ms, d.scheduled_start_ms + by_id[d.fg_id].duration_ms)
+            for d in result.decisions
+            if not d.is_postponed
+        )
+        for (_, prev_end), (start, _) in zip(kept, kept[1:], strict=False):
+            assert start >= prev_end - 1e-9
+        for decision in result.decisions:
+            fg = by_id[decision.fg_id]
+            assert decision.delay_ms >= 0.0
+            if decision.is_postponed:
+                continue
+            end = decision.scheduled_start_ms + fg.duration_ms
+            assert end <= fg.deadline_ms
+            assert end <= cycle.end_ms
+            assert decision.scheduled_start_ms >= result.t_free_end_ms or (
+                end <= result.t_free_start_ms
+            )
+
+
+def test_ecc_zero_demand_leaves_wifi_untouched() -> None:
+    result = schedule_ecc(FGS, 0.0, 100.0, d_free_ms=0.0)
+    assert result.t_free_end_ms == result.t_free_start_ms == 0.0
+    assert all(d.delay_ms == 0.0 for d in result.decisions)
+
+
+def test_ecc_invalid_inputs() -> None:
+    with pytest.raises(ConfigurationError):
+        schedule_ecc(FGS, 0.0, 100.0, d_free_ms=-1.0)
+    with pytest.raises(ConfigurationError):
+        schedule_ecc(FGS, 0.0, 100.0, d_free_ms=31.0, nav_limit_ms=0.0)
+    with pytest.raises(ConfigurationError):
+        schedule_ecc(FGS, 100.0, 0.0, d_free_ms=31.0)

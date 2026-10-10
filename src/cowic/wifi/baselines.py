@@ -8,9 +8,12 @@ the simulation engine can drive every experiment through one interface.
 * Exp 2 (opportunistic): WiFi keeps its original timing. The AP finds the
   largest natural whitespace in the cycle and announces it to ZigBee over
   unidirectional CTC.
+* Exp 3 (ECC [22]): the AP reserves a fixed window at the start of the cycle
+  with a CTS-to-self (NAV) and notifies ZigBee via CTC. The legacy NAV caps
+  the reservation at 40 ms. Overlapping WiFi FGs are deferred past it.
 
-Neither baseline reserves a sensing window, so it is reported as an empty
-interval at the start of the cycle.
+No baseline reserves a sensing window, so it is reported as an empty interval
+at the start of the cycle.
 """
 
 import time
@@ -19,6 +22,8 @@ from collections.abc import Sequence
 from cowic.exceptions import ConfigurationError
 from cowic.models.frame_group import FrameGroup, SchedulingDecision
 from cowic.wifi.milp_scheduler import ScheduleResult
+
+NAV_LIMIT_MS = 40.0  # Longest window legacy NAV can reserve (Section 5.3.1).
 
 
 def find_whitespaces(
@@ -57,8 +62,8 @@ def schedule_uncoordinated(
     """Exp 1: keep WiFi timing unchanged and grant no ZigBee window."""
     _check_cycle(t_start_ms, t_end_ms)
     began = time.perf_counter()
-    return _unchanged_result(
-        frame_groups,
+    return _result(
+        _unchanged(frame_groups),
         free=(t_start_ms, t_start_ms),
         t_start_ms=t_start_ms,
         status="static",
@@ -79,8 +84,7 @@ def schedule_opportunistic(
     length, whichever is shorter. If the cycle has no idle time, the window
     is empty.
     """
-    if d_free_ms < 0:
-        raise ConfigurationError(f"d_free_ms must be non-negative, got {d_free_ms}")
+    _check_demand(d_free_ms)
     began = time.perf_counter()
     gaps = find_whitespaces(frame_groups, t_start_ms, t_end_ms)
     if gaps:
@@ -88,8 +92,8 @@ def schedule_opportunistic(
         free = (gap_start, min(gap_end, gap_start + d_free_ms))
     else:
         free = (t_start_ms, t_start_ms)
-    return _unchanged_result(
-        frame_groups,
+    return _result(
+        _unchanged(frame_groups),
         free=free,
         t_start_ms=t_start_ms,
         status="gap_search",
@@ -97,22 +101,76 @@ def schedule_opportunistic(
     )
 
 
-def _unchanged_result(
+def schedule_ecc(
     frame_groups: Sequence[FrameGroup],
+    t_start_ms: float,
+    t_end_ms: float,
+    d_free_ms: float,
+    nav_limit_ms: float = NAV_LIMIT_MS,
+) -> ScheduleResult:
+    """Exp 3: reserve a fixed NAV window at the cycle start and defer WiFi.
+
+    The window is ``[t_start_ms, t_start_ms + w]`` with
+    ``w = min(d_free_ms, nav_limit_ms, cycle length)``; ECC does not adapt
+    its position or exceed the NAV limit, whatever ZigBee demands.
+
+    FGs are served in original order on one channel. An FG keeps its original
+    start unless it overlaps the window or an earlier deferred FG, in which
+    case it starts as soon as the channel is free again. An FG that would then
+    finish after its deadline or after the cycle end is postponed to the next
+    cycle: it is reported at ``t_end_ms`` with ``is_postponed=True`` and does
+    not occupy airtime in this cycle.
+    """
+    _check_cycle(t_start_ms, t_end_ms)
+    _check_demand(d_free_ms)
+    if nav_limit_ms <= 0:
+        raise ConfigurationError(f"nav_limit_ms must be positive, got {nav_limit_ms}")
+    began = time.perf_counter()
+    window_end = t_start_ms + min(d_free_ms, nav_limit_ms, t_end_ms - t_start_ms)
+
+    by_id: dict[int, SchedulingDecision] = {}
+    channel_free_at = t_start_ms
+    for fg in sorted(frame_groups, key=lambda fg: fg.original_start_ms):
+        start = max(fg.original_start_ms, channel_free_at)
+        overlaps = start < window_end and start + fg.duration_ms > t_start_ms
+        if overlaps and window_end > t_start_ms:
+            start = window_end  # Silenced by the NAV until the window ends.
+        end = start + fg.duration_ms
+        if end > fg.deadline_ms or end > t_end_ms:
+            by_id[fg.fg_id] = _decision(fg, t_end_ms, postponed=True)
+            continue
+        by_id[fg.fg_id] = _decision(fg, start, postponed=False)
+        channel_free_at = end
+
+    return _result(
+        [by_id[fg.fg_id] for fg in frame_groups],
+        free=(t_start_ms, window_end),
+        t_start_ms=t_start_ms,
+        status="ecc_nav",
+        began=began,
+    )
+
+
+def _decision(fg: FrameGroup, start_ms: float, postponed: bool) -> SchedulingDecision:
+    return SchedulingDecision(
+        fg_id=fg.fg_id,
+        scheduled_start_ms=start_ms,
+        is_postponed=postponed,
+        delay_ms=start_ms - fg.original_start_ms,
+    )
+
+
+def _unchanged(frame_groups: Sequence[FrameGroup]) -> list[SchedulingDecision]:
+    return [_decision(fg, fg.original_start_ms, postponed=False) for fg in frame_groups]
+
+
+def _result(
+    decisions: list[SchedulingDecision],
     free: tuple[float, float],
     t_start_ms: float,
     status: str,
     began: float,
 ) -> ScheduleResult:
-    decisions = [
-        SchedulingDecision(
-            fg_id=fg.fg_id,
-            scheduled_start_ms=fg.original_start_ms,
-            is_postponed=False,
-            delay_ms=0.0,
-        )
-        for fg in frame_groups
-    ]
     return ScheduleResult(
         decisions=decisions,
         t_free_start_ms=free[0],
@@ -129,3 +187,8 @@ def _check_cycle(t_start_ms: float, t_end_ms: float) -> None:
         raise ConfigurationError(
             f"Cycle end {t_end_ms} must be after cycle start {t_start_ms}"
         )
+
+
+def _check_demand(d_free_ms: float) -> None:
+    if d_free_ms < 0:
+        raise ConfigurationError(f"d_free_ms must be non-negative, got {d_free_ms}")
