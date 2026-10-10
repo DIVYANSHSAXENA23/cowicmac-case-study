@@ -79,10 +79,14 @@ def _widest_window(
     target_end: float,
     t_end_ms: float,
 ) -> float:
-    """Largest window end in ``[safe_end, target_end]`` with no postponement.
+    """Largest feasible window end in ``[safe_end, target_end]``.
 
-    ``safe_end`` (the end of the idle gap) never moves an FG. Postponements
-    only grow as the window lengthens, so bisection finds the boundary.
+    ``safe_end`` (the end of the idle gap) usually never moves an FG, but
+    deferral can still cascade: an FG bumped to clear the window's start may
+    itself now overlap ``safe_end``, forcing a further, otherwise-avoidable
+    postponement. If even ``safe_end`` is infeasible, return ``window_start``
+    (an empty window) instead, so the fallback never introduces a
+    postponement that would not occur without it.
     """
 
     def feasible(end: float) -> bool:
@@ -91,6 +95,8 @@ def _widest_window(
 
     if feasible(target_end):
         return target_end
+    if not feasible(safe_end):
+        return window_start
     low, high = safe_end, target_end
     for _ in range(_SEARCH_STEPS):
         mid = (low + high) / 2.0

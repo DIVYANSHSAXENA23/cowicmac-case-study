@@ -67,6 +67,28 @@ def test_extension_stops_before_a_deadline_miss() -> None:
     assert not any(d.is_postponed for d in result.decisions)
 
 
+def test_widest_window_never_returns_an_infeasible_safe_end() -> None:
+    # FG 1 sits in its own clean slot before the target gap. FG 2 and FG 3
+    # already conflict with each other in their *original* positions (FG 3
+    # starts at 63, before FG 2's natural end at 65) - a pre-existing, window-
+    # unrelated deadline miss. The largest natural gap is [10, 60] (width 50);
+    # a 55ms request cannot fit, forcing the extend path with
+    # safe_end=60. Before the fix, _widest_window returned safe_end (or a
+    # value found by bisecting towards it) whenever _any_postponed was true
+    # for every candidate tested, even though that postponement has nothing
+    # to do with the window - silently reporting a "clear" window that
+    # wasn't. The fix must fall back to returning window_start (no
+    # window) rather than asserting a window end it cannot verify is
+    # genuinely postponement-free.
+    fgs = [
+        _fg(1, 0.0, 10.0, bound=190.0),
+        _fg(2, 60.0, 5.0, bound=1.0),
+        _fg(3, 63.0, 5.0, bound=1.0),
+    ]
+    result = fallback_whitespace_expansion(fgs, 0.0, 100.0, 55.0)
+    assert result.t_free_start_ms == result.t_free_end_ms == 10.0
+
+
 def test_sensing_keeps_priority_when_window_is_short() -> None:
     fgs = [_fg(1, 0.0, 10.0, bound=0.0), _fg(2, 16.0, 84.0, bound=0.0)]
     result = fallback_whitespace_expansion(fgs, 0.0, 100.0, 62.0, 10.0)

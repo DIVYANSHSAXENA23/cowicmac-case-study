@@ -102,9 +102,9 @@ class APOrchestrator:
         ap_id: str = "AP_0",
         optimal_statuses: frozenset[str] = OPTIMAL_STATUSES,
     ) -> None:
-        if d_sensing_ms < 0:
+        if not math.isfinite(d_sensing_ms) or d_sensing_ms < 0:
             raise ConfigurationError(
-                f"d_sensing_ms must be non-negative, got {d_sensing_ms}"
+                f"d_sensing_ms must be finite and non-negative, got {d_sensing_ms}"
             )
         self.ctc = ctc
         self.scheduler = scheduler
@@ -130,6 +130,12 @@ class APOrchestrator:
             t_end_ms: Cycle end.
             zbeacon: The ZBeacon delivered by CTC this cycle, or ``None`` if it
                 was lost or the ZC sent none.
+
+        If any step raises, the AP is restored to ``MAINTAINING`` before the
+        exception propagates, so one malformed ZBeacon, scheduler bug, or CTC
+        transmit failure doesn't permanently strand every later cycle in an
+        intermediate state (Section 4.5.2: a coordination failure must not
+        compromise baseline network functionality in later cycles).
         """
         if self.state is not APState.MAINTAINING:
             raise ProtocolError(f"Cycle started while AP is in {self.state.name}")
@@ -137,7 +143,20 @@ class APOrchestrator:
             raise ConfigurationError(
                 f"Cycle end {t_end_ms} must be after cycle start {t_start_ms}"
             )
+        try:
+            return self._run_cycle(frame_groups, t_start_ms, t_end_ms, zbeacon)
+        except Exception:
+            self.state = APState.MAINTAINING
+            self.history.append(APState.MAINTAINING)
+            raise
 
+    def _run_cycle(
+        self,
+        frame_groups: Sequence[FrameGroup],
+        t_start_ms: float,
+        t_end_ms: float,
+        zbeacon: CTCMessage | None,
+    ) -> CycleOutcome:
         self._advance(APState.CTC_GATHERING)
         if zbeacon is not None:
             self.demand_ms = _read_demand(zbeacon)

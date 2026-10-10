@@ -129,6 +129,19 @@ def test_unexpected_scheduler_error_propagates() -> None:
     ap = APOrchestrator(FakeCTC(), FakeScheduler(error=RuntimeError("bug")))
     with pytest.raises(RuntimeError):
         ap.process_cycle(FGS, 0.0, 100.0, _zbeacon())
+    # A genuine bug still surfaces, but must not strand the AP's state.
+    assert ap.state is APState.MAINTAINING
+
+
+def test_ctc_transmit_failure_still_restores_maintaining() -> None:
+    class RaisingCTC:
+        def transmit(self, message: CTCMessage) -> bool:
+            raise RuntimeError("link down")
+
+    ap = APOrchestrator(RaisingCTC(), FakeScheduler())
+    with pytest.raises(RuntimeError):
+        ap.process_cycle(FGS, 0.0, 100.0, _zbeacon())
+    assert ap.state is APState.MAINTAINING
 
 
 def test_wbeacon_announces_reserved_windows() -> None:
@@ -173,6 +186,12 @@ def test_invalid_zbeacon_rejected(message: CTCMessage) -> None:
     ap = APOrchestrator(FakeCTC(), FakeScheduler())
     with pytest.raises(ProtocolError):
         ap.process_cycle(FGS, 0.0, 100.0, message)
+    # A malformed ZBeacon must not strand the AP: it should recover to
+    # MAINTAINING and accept the next cycle normally.
+    assert ap.state is APState.MAINTAINING
+    outcome = ap.process_cycle(FGS, 0.0, 100.0, _zbeacon())
+    assert ap.state is APState.MAINTAINING
+    assert outcome.schedule is not None
 
 
 def test_cycle_must_start_in_maintaining() -> None:
@@ -191,6 +210,10 @@ def test_illegal_transition_rejected() -> None:
 def test_invalid_configuration() -> None:
     with pytest.raises(ConfigurationError):
         APOrchestrator(FakeCTC(), d_sensing_ms=-1.0)
+    with pytest.raises(ConfigurationError):
+        APOrchestrator(FakeCTC(), d_sensing_ms=math.nan)
+    with pytest.raises(ConfigurationError):
+        APOrchestrator(FakeCTC(), d_sensing_ms=math.inf)
     ap = APOrchestrator(FakeCTC())
     with pytest.raises(ConfigurationError):
         ap.process_cycle(FGS, 100.0, 100.0, None)
