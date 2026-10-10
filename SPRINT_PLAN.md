@@ -10,18 +10,23 @@
 - **Upayan Mazumder (`upayanmazumder`) [Lead]:**
   - Optimization engine and MILP formulation (`src/cowic/wifi/milp_scheduler.py`).
   - Discrete-event simulation engine (`src/cowic/sim/simulation_engine.py`).
+  - Shared channel collision medium (`src/cowic/sim/channel_medium.py`).
+  - Reassigned from Divyansh: ZigBee L-WSA adapter (`src/cowic/zigbee/lwsa_adapter.py`,
+    `src/cowic/zigbee/coordinator.py`, issue #4) and the figure plotter
+    (`src/cowic/analysis/plotter.py`, issue #10).
   - Integration lead, code review, and branch merging.
 
 - **Nitesh Pandey (`Nitesh050`):**
   - WiFi AP orchestrator state machine (`src/cowic/wifi/ap_orchestrator.py`).
   - Synthetic traffic generator and trace parser (`traces/synthetic_generator.py`).
   - Baseline coexistence implementations (`Exp 1`, `Exp 2`, `Exp 3`).
+  - Reassigned from Divyansh: Cross-Technology Communication channel model
+    (`src/cowic/ctc/channel.py`, issue #3) and the metrics calculator
+    (`src/cowic/analysis/metrics.py`, issue #9).
 
-- **Divyansh Saxena (`DIVYANSHSAXENA23`):**
-  - ZigBee Coordinator and superframe manager (`src/cowic/zigbee/coordinator.py`).
-  - Lightweight Window-Scaling Algorithm (`src/cowic/zigbee/lwsa_adapter.py`).
-  - Cross-Technology Communication channel model (`src/cowic/ctc/channel.py`).
-  - Automated test suite and metrics evaluation (`src/cowic/analysis/`).
+- **Divyansh Saxena (`DIVYANSHSAXENA23`):** Temporarily unavailable. His 4 open
+  issues (#3, #4, #9, #10) are reassigned above, split 2/2 between Upayan and
+  Nitesh by domain overlap with their existing work.
 
 ---
 
@@ -31,7 +36,7 @@
 - **Task 1.1 (`Nitesh050`):** Implement `traces/synthetic_generator.py`.
   - Deliverable: Generate synthetic WiFi Frame Group traces matching Table 5 parameters (Traffic I and III).
   - Verification: `pytest tests/test_trace_generator.py`.
-- **Task 1.2 (`DIVYANSHSAXENA23`):** Implement `src/cowic/ctc/channel.py`.
+- **Task 1.2 (`Nitesh050`):** Implement `src/cowic/ctc/channel.py`.
   - Deliverable: WBeacon and ZBeacon frame exchange with configurable packet error rates.
   - Verification: Unit tests in `tests/test_ctc_channel.py`.
 - **Task 1.3 (`upayanmazumder`):** Implement `src/cowic/wifi/milp_scheduler.py`.
@@ -39,7 +44,7 @@
   - Verification: `pytest tests/test_milp_solver.py`.
 
 ### Milestone 2 (Afternoon: 14:00 – 18:00) — Protocol State Machines
-- **Task 2.1 (`DIVYANSHSAXENA23`):** Implement `src/cowic/zigbee/lwsa_adapter.py` and `coordinator.py`.
+- **Task 2.1 (`upayanmazumder`):** Implement `src/cowic/zigbee/lwsa_adapter.py` and `coordinator.py`.
   - Deliverable: L-WSA discrete search algorithm and superframe configuration broadcaster.
   - Verification: `pytest tests/test_lwsa_algorithm.py`.
 - **Task 2.2 (`Nitesh050`):** Implement `src/cowic/wifi/ap_orchestrator.py`.
@@ -64,7 +69,7 @@
 - **Task 3.2 (`Nitesh050`):** Implement baseline execution drivers.
   - Deliverable: Run scripts for Exp 1 (Static) and Exp 2 (Opportunistic).
   - Verification: Assert non-zero packet drop rates for baseline configurations.
-- **Task 3.3 (`DIVYANSHSAXENA23`):** Implement `src/cowic/analysis/metrics.py`.
+- **Task 3.3 (`Nitesh050`):** Implement `src/cowic/analysis/metrics.py`.
   - Deliverable: Compute $G_z$, $PDR_w$, $U_\text{eff}$, jitter, and maximum delay.
   - Verification: Unit tests with precomputed mock transmission records.
 
@@ -72,7 +77,7 @@
 - **Task 4.1 (`Nitesh050` & `upayanmazumder`):** Execute full experimental sweeps.
   - Deliverable: Run Exp 1 through Exp 6 across Traffic I and Traffic III.
   - Verification: Result CSV files stored under `results/`.
-- **Task 4.2 (`DIVYANSHSAXENA23`):** Implement `src/cowic/analysis/plotter.py`.
+- **Task 4.2 (`upayanmazumder`):** Implement `src/cowic/analysis/plotter.py`.
   - Deliverable: Generate evaluation figures reproducing Figures 11, 14, and 16.
   - Verification: Rendered figures stored in `figures/`.
 
