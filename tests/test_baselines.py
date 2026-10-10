@@ -142,6 +142,22 @@ def test_ecc_window_position_is_fixed() -> None:
     assert (result.t_free_start_ms, result.t_free_end_ms) == (100.0, 131.0)
 
 
+def test_ecc_carryover_fg_preserved_and_nav_suppressed() -> None:
+    # A FG running 95-110ms, carried into a cycle starting at 100ms: the
+    # fixed cycle-start NAV would otherwise overlap live WiFi airtime.
+    carryover = _fg(1, 95.0, 15.0)
+    fresh = _fg(2, 120.0, 5.0)
+    result = schedule_ecc([carryover, fresh], 100.0, 300.0, d_free_ms=31.0)
+
+    assert result.t_free_start_ms == result.t_free_end_ms == 100.0
+    by_id = {d.fg_id: d for d in result.decisions}
+    assert by_id[1].scheduled_start_ms == 95.0
+    assert by_id[1].is_postponed is False
+    assert by_id[1].delay_ms == 0.0
+    assert by_id[2].scheduled_start_ms == 120.0
+    assert by_id[2].is_postponed is False
+
+
 def test_ecc_defers_overlapping_fg_to_window_end() -> None:
     result = schedule_ecc([_fg(1, 10.0, 5.0)], 0.0, 200.0, d_free_ms=31.0)
     (decision,) = result.decisions
@@ -192,22 +208,31 @@ def test_ecc_preserves_input_order() -> None:
 
 @pytest.mark.parametrize("profile", ["Traffic_I", "Traffic_III"])
 def test_ecc_invariants_on_real_trace(profile: str) -> None:
-    # Unlike Exp 2's gap search, ECC's window position (fixed at the cycle
-    # start, Section 5.3.1) never depends on frame_groups, and an FG carried
-    # over from an earlier cycle already started in the past: it cannot be
-    # deferred to a new time without contradicting its real (already-fixed)
-    # schedule. So, unlike schedule_opportunistic, members here is correctly
-    # just this cycle's own FGs (cycle.frame_groups) - see #13 review notes
-    # on why schedule_ecc is not exposed to the same active_carryover bug
-    # that affected schedule_opportunistic.
+    # Realistic per-cycle driving: the cycle's own FGs plus any FG carried
+    # over from an earlier cycle that is still transmitting. schedule_ecc
+    # must preserve a carryover FG's original (already-decided) start
+    # unchanged, and suppress the fixed cycle-start NAV entirely whenever
+    # carryover is active, since a legacy NAV cannot retroactively silence
+    # a transmission already in progress.
     fgs = frame_groups_from_frame(build_trace(load_profile(profile), 10.0))
     for cycle in iter_cycles(fgs, cycle_ms=1000.0):
-        members = list(cycle.frame_groups)
+        carryover_ids = {fg.fg_id for fg in cycle.active_carryover}
+        members = [*cycle.frame_groups, *cycle.active_carryover]
         result = schedule_ecc(members, cycle.start_ms, cycle.end_ms, 62.0)
-        assert result.t_free_end_ms - result.t_free_start_ms == 40.0
         assert len(result.decisions) == len(members)
 
+        if carryover_ids:
+            assert result.t_free_start_ms == result.t_free_end_ms == cycle.start_ms
+        else:
+            assert result.t_free_end_ms - result.t_free_start_ms == 40.0
+
         by_id = {fg.fg_id: fg for fg in members}
+        for fg in cycle.active_carryover:
+            decision = next(d for d in result.decisions if d.fg_id == fg.fg_id)
+            assert decision.is_postponed is False
+            assert decision.scheduled_start_ms == fg.original_start_ms
+            assert decision.delay_ms == 0.0
+
         kept = sorted(
             (d.scheduled_start_ms, d.scheduled_start_ms + by_id[d.fg_id].duration_ms)
             for d in result.decisions
@@ -216,6 +241,8 @@ def test_ecc_invariants_on_real_trace(profile: str) -> None:
         for (_, prev_end), (start, _) in zip(kept, kept[1:], strict=False):
             assert start >= prev_end - 1e-9
         for decision in result.decisions:
+            if decision.fg_id in carryover_ids:
+                continue
             fg = by_id[decision.fg_id]
             assert decision.delay_ms >= 0.0
             if decision.is_postponed:
