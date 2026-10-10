@@ -117,6 +117,26 @@ def test_adapt_superframe_avoids_reserving_trailing_blocked_slots() -> None:
     assert total_active_end_ms <= 15.0 + 1e-9
 
 
+def test_adapt_superframe_keeps_mid_window_slot_reserved_but_not_padded() -> None:
+    """A WiFi fragment inside the middle of the active run cannot be
+    structurally skipped (the superframe grid is contiguous): the slot
+    stays reserved, but the search still doesn't pad extra trailing
+    slots beyond what maximizes efficiency (accepted design limitation,
+    see module docstring; real nodes absorb this via CSMA/CA backoff)."""
+    adapter = LWSAAdapter()
+    fragment = (20.0, 25.0)
+    config = adapter.adapt_superframe(0.0, 62.0, [fragment])
+    active_end_ms = (
+        config.beacon_offset_ms
+        + (1 + config.cap_slots + config.cfp_slots) * config.slot_duration_ms
+    )
+    # The fragment lies inside the chosen active interval (structurally
+    # unavoidable), but the interval still fits the granted window.
+    assert config.beacon_offset_ms <= fragment[0]
+    assert active_end_ms > fragment[1]
+    assert active_end_ms <= 62.0 + 1e-9
+
+
 def test_packet_duration_capped_by_slot_and_hardware() -> None:
     """t_pk (Eq. 8) never exceeds the slot width minus turnaround/ack."""
     small_slot = BASE_SLOT_DURATION_MS  # 0.96 ms

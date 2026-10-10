@@ -18,6 +18,18 @@ tightly bounded by IEEE 802.15.4's standard-defined parameter space
 (``t_SfSlot`` from a discrete doubling sequence, ``0 <= j <= 7``,
 ``i + j <= 15``) and a handful of beacon-offset candidates, so it reduces to
 a low-dimensional discrete search solvable by enumeration (Section 4.4).
+
+``SuperframeConfig.cap_slots``/``cfp_slots`` report one *contiguous*
+allocation, matching IEEE 802.15.4's actual superframe structure (there is
+no mechanism to structurally "skip" an individual slot mid-sequence while
+keeping later slots active). ``_best_slot_split`` does shrink the
+allocation's *tail* when trailing slots are known in advance to overlap
+WiFi (no reason to reserve dead airtime there), but a WiFi fragment landing
+inside the middle of an otherwise-useful run still keeps that slot
+reserved: at runtime, the ZigBee node's own CSMA/CA backoff (for CAP) or
+a missed GTS opportunity (for CFP) absorbs the collision, exactly as a
+real IEEE 802.15.4 node would behave. This mirrors the base paper's own
+``m``/``n`` *counting* model (Eq. 9) rather than a per-slot exclusion list.
 """
 
 from collections.abc import Sequence
