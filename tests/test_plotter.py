@@ -153,3 +153,25 @@ def test_metric_columns_match_simulation_metrics_fields() -> None:
     simulation_metrics_fields = set(SimulationMetrics.__dataclass_fields__)
     assert metric_field_names <= simulation_metrics_fields
     assert len(METRIC_COLUMNS) == 6
+
+
+def test_plot_benchmark_rejects_zero_byte_csv(tmp_path: Path) -> None:
+    """A completely empty (zero-byte) CSV raises pandas.errors.EmptyDataError
+    internally; this must surface as ConfigurationError, not escape raw."""
+    zero_byte_csv = tmp_path / "zero_byte.csv"
+    zero_byte_csv.write_text("")
+    plotter = ResultPlotter(tmp_path / "figures")
+    with pytest.raises(ConfigurationError):
+        plotter.plot_benchmark(zero_byte_csv)
+
+
+def test_plot_benchmark_rejects_missing_experiment_id(tmp_path: Path) -> None:
+    """A row with a blank experiment_id must not be silently dropped by
+    groupby during plotting; it must raise instead."""
+    rows = _benchmark_rows(["Exp_1", "Exp_2"], "d_free_ms", [31.0, 62.0])
+    rows[0]["experiment_id"] = float("nan")
+    csv_path = tmp_path / "missing_id.csv"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    plotter = ResultPlotter(tmp_path / "figures")
+    with pytest.raises(ConfigurationError):
+        plotter.plot_benchmark(csv_path)

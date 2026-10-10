@@ -111,12 +111,20 @@ class ResultPlotter:
     def _load(self, results_csv: Path) -> pd.DataFrame:
         if not results_csv.exists():
             raise ConfigurationError(f"Results CSV not found: {results_csv}")
-        df = pd.read_csv(results_csv)
+        try:
+            df = pd.read_csv(results_csv)
+        except pd.errors.EmptyDataError as exc:
+            raise ConfigurationError(f"{results_csv}: no rows to plot") from exc
         missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
         if missing:
             raise ConfigurationError(f"{results_csv}: missing columns {missing}")
         if df.empty:
             raise ConfigurationError(f"{results_csv}: no rows to plot")
+        if df["experiment_id"].isna().any():
+            raise ConfigurationError(
+                f"{results_csv}: rows with a missing experiment_id would be "
+                f"silently dropped by plotting"
+            )
         return df
 
     def _plot_grid(
