@@ -239,3 +239,37 @@ def test_simulation_engine_falls_back_to_csma_ca_on_total_ctc_loss(
     assert result["wbeacon_lost"] == result["cycles_run"]
     assert result["csma_ca_fallback_cycles"] == result["cycles_run"]
     assert result["zigbee_packets_attempted"] > 0
+
+
+def test_simulation_engine_applies_ctc_delay_as_simulated_time(
+    short_trace: Path,
+) -> None:
+    """A large per-attempt CTC delay, compounded by retries on a high PER,
+    consumes enough simulated time to measurably reduce how many cycles
+    complete within the horizon - proving delay_ms is actually applied
+    to env.now, not just stored as an unused attribute."""
+    negligible_delay = SimulationConfig(
+        scenario_name="Test_CTCDelay_Fast",
+        duration_s=2.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=500.0,
+        ctc_delay_ms=0.001,
+        ctc_per=0.0,
+        ctc_max_retries=0,
+    )
+    heavy_delay = SimulationConfig(
+        scenario_name="Test_CTCDelay_Slow",
+        duration_s=2.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=500.0,
+        ctc_delay_ms=400.0,
+        ctc_per=0.99,
+        ctc_max_retries=5,
+    )
+    fast_result = SimulationEngine(negligible_delay).run()
+    slow_result = SimulationEngine(heavy_delay).run()
+    assert slow_result["cycles_run"] < fast_result["cycles_run"]

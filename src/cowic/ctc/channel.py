@@ -75,13 +75,17 @@ class CTCChannel:
         self.sent_count = 0
         self.dropped_count = 0
         self.retry_count = 0
+        self.last_attempts = 0
 
     def transmit(self, message: CTCMessage) -> bool:
         """Deliver a CTC signaling frame, retrying on loss up to
         ``max_retries`` times before timing out (Section 4.2 handshake
         timeout). Each attempt - the first and every retry - is counted
         in ``sent_count``; only a fully exhausted handshake counts
-        against ``dropped_count``.
+        against ``dropped_count``. ``last_attempts`` records how many
+        attempts this call used, so a caller advancing simulated time
+        (e.g. a SimPy process) can apply ``last_attempts * delay_ms``
+        rather than a flat one-attempt delay.
 
         Returns:
             ``True`` if any attempt was delivered, ``False`` if every
@@ -92,8 +96,10 @@ class CTCChannel:
         for attempt in range(self.max_retries + 1):
             if self._rng.random() >= self.per:
                 self.retry_count += attempt
+                self.last_attempts = attempt + 1
                 return True
         self.retry_count += self.max_retries
+        self.last_attempts = self.max_retries + 1
         self.dropped_count += 1
         return False
 
@@ -102,3 +108,4 @@ class CTCChannel:
         self.sent_count = 0
         self.dropped_count = 0
         self.retry_count = 0
+        self.last_attempts = 0

@@ -432,11 +432,13 @@ class SimulationEngine:
 
             zbeacon: CTCMessage | None = None
             if bidirectional:
-                zbeacon = zc.build_zbeacon(
+                raw_zbeacon = zc.build_zbeacon(
                     config.zigbee_pending_packets, cycle.start_ms
                 )
+                if ctc.transmit(raw_zbeacon):
+                    zbeacon = raw_zbeacon
                 if ctc.delay_ms > 0:
-                    yield env.timeout(ctc.delay_ms)
+                    yield env.timeout(ctc.last_attempts * ctc.delay_ms)
 
             outcome = ap.process_cycle(
                 cycle.frame_groups,
@@ -446,7 +448,7 @@ class SimulationEngine:
                 cycle.active_carryover,
             )
             if ctc.delay_ms > 0:
-                yield env.timeout(ctc.delay_ms)
+                yield env.timeout(ctc.last_attempts * ctc.delay_ms)
             stats.record_cycle(outcome)
 
             for decision in outcome.schedule.decisions:
