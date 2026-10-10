@@ -1,0 +1,117 @@
+"""Tests for the whitespace-expansion fallback scheduler."""
+
+import pytest
+
+from cowic.exceptions import ConfigurationError
+from cowic.models.frame_group import FrameGroup
+from cowic.wifi.baselines import find_whitespaces
+from cowic.wifi.fallback import FALLBACK_STATUS, fallback_whitespace_expansion
+from traces.playback import frame_groups_from_frame, iter_cycles
+from traces.synthetic_generator import build_trace, load_profile
+
+
+def _fg(fg_id: int, start: float, duration: float, bound: float = 100.0) -> FrameGroup:
+    return FrameGroup(
+        fg_id=fg_id,
+        arrival_time_ms=start,
+        duration_ms=duration,
+        deadline_ms=start + duration + bound,
+        original_start_ms=start,
+        qos_sensitive=False,
+    )
+
+
+# Gaps in [0, 100]: [0, 10], [20, 50], [55, 80], [90, 100].
+FGS = [_fg(1, 10.0, 10.0), _fg(2, 50.0, 5.0), _fg(3, 80.0, 10.0)]
+
+
+def _windows(fgs: list[FrameGroup], **kwargs: float) -> tuple[float, ...]:
+    r = fallback_whitespace_expansion(fgs, 0.0, 100.0, **kwargs)
+    return (r.t_sense_start_ms, r.t_sense_end_ms, r.t_free_start_ms, r.t_free_end_ms)
+
+
+def test_uses_earliest_fitting_gap_without_moving_wifi() -> None:
+    result = fallback_whitespace_expansion(FGS, 0.0, 100.0, 20.0, 5.0)
+    # [0, 10] is too small; [20, 50] holds 25 ms.
+    assert (result.t_sense_start_ms, result.t_sense_end_ms) == (20.0, 25.0)
+    assert (result.t_free_start_ms, result.t_free_end_ms) == (25.0, 45.0)
+    assert result.solver_status == FALLBACK_STATUS
+    assert all(d.delay_ms == 0.0 for d in result.decisions)
+
+
+def test_no_sensing_window() -> None:
+    assert _windows(FGS, d_free_ms=8.0) == (0.0, 0.0, 0.0, 8.0)
+
+
+def test_zero_request_moves_nothing() -> None:
+    result = fallback_whitespace_expansion(FGS, 0.0, 100.0, 0.0)
+    assert result.t_free_end_ms == result.t_free_start_ms
+    assert all(d.delay_ms == 0.0 for d in result.decisions)
+
+
+def test_extends_largest_gap_by_deferring_wifi() -> None:
+    result = fallback_whitespace_expansion(FGS, 0.0, 100.0, 40.0)
+    # Largest gap [20, 50] extends to [20, 60]; FG 2 moves to 60.
+    assert (result.t_free_start_ms, result.t_free_end_ms) == (20.0, 60.0)
+    starts = {d.fg_id: d.scheduled_start_ms for d in result.decisions}
+    assert starts == {1: 10.0, 2: 60.0, 3: 80.0}
+    assert not any(d.is_postponed for d in result.decisions)
+
+
+def test_extension_stops_before_a_deadline_miss() -> None:
+    # FG 2 may start at most 4 ms late, so the window can end at 54 at most.
+    fgs = [_fg(1, 10.0, 10.0), _fg(2, 50.0, 5.0, bound=4.0), _fg(3, 80.0, 10.0)]
+    result = fallback_whitespace_expansion(fgs, 0.0, 100.0, 40.0)
+    assert result.t_free_start_ms == 20.0
+    assert result.t_free_end_ms == pytest.approx(54.0, abs=1e-6)
+    assert not any(d.is_postponed for d in result.decisions)
+
+
+def test_sensing_keeps_priority_when_window_is_short() -> None:
+    fgs = [_fg(1, 0.0, 10.0, bound=0.0), _fg(2, 16.0, 84.0, bound=0.0)]
+    result = fallback_whitespace_expansion(fgs, 0.0, 100.0, 62.0, 10.0)
+    assert (result.t_sense_start_ms, result.t_sense_end_ms) == (10.0, 16.0)
+    assert result.t_free_start_ms == result.t_free_end_ms == 16.0
+
+
+def test_fully_busy_cycle_extends_from_cycle_start() -> None:
+    result = fallback_whitespace_expansion([_fg(1, 0.0, 50.0)], 0.0, 50.0, 10.0)
+    assert (result.t_free_start_ms, result.t_free_end_ms) == (0.0, 0.0)
+    assert result.decisions[0].delay_ms == 0.0
+
+
+def test_window_capped_by_cycle_end() -> None:
+    result = fallback_whitespace_expansion([], 0.0, 30.0, 62.0)
+    assert (result.t_free_start_ms, result.t_free_end_ms) == (0.0, 30.0)
+
+
+@pytest.mark.parametrize("profile", ["Traffic_I", "Traffic_II"])
+def test_invariants_on_real_trace(profile: str) -> None:
+    fgs = frame_groups_from_frame(build_trace(load_profile(profile), 10.0))
+    for cycle in iter_cycles(fgs, cycle_ms=1000.0):
+        members = list(cycle.frame_groups)
+        result = fallback_whitespace_expansion(
+            members, cycle.start_ms, cycle.end_ms, 62.0, 10.0
+        )
+        start, end = result.t_sense_start_ms, result.t_free_end_ms
+        gaps = find_whitespaces(members, cycle.start_ms, cycle.end_ms)
+        largest = max((b - a for a, b in gaps), default=0.0)
+
+        assert min(largest, 72.0) - 1e-9 <= end - start <= 72.0 + 1e-9
+        assert result.t_sense_end_ms == result.t_free_start_ms
+        by_id = {fg.fg_id: fg for fg in members}
+        for decision in result.decisions:
+            assert not decision.is_postponed
+            fg_end = decision.scheduled_start_ms + by_id[decision.fg_id].duration_ms
+            assert fg_end <= start + 1e-9 or decision.scheduled_start_ms >= end
+            if decision.delay_ms > 0:
+                assert fg_end <= by_id[decision.fg_id].deadline_ms + 1e-9
+
+
+def test_invalid_inputs() -> None:
+    with pytest.raises(ConfigurationError):
+        fallback_whitespace_expansion(FGS, 0.0, 100.0, -1.0)
+    with pytest.raises(ConfigurationError):
+        fallback_whitespace_expansion(FGS, 0.0, 100.0, 10.0, -1.0)
+    with pytest.raises(ConfigurationError):
+        fallback_whitespace_expansion(FGS, 100.0, 0.0, 10.0)

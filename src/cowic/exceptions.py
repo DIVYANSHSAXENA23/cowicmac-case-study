@@ -11,3 +11,7 @@ class ConfigurationError(CoWiCError):
 
 class TraceError(CoWiCError):
     """Raised when a WiFi trace is malformed or cannot be generated."""
+
+
+class ProtocolError(CoWiCError):
+    """Raised on an invalid protocol state transition or control message."""
