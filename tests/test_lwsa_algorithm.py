@@ -93,6 +93,17 @@ def test_adapt_superframe_fully_busy_window_returns_empty() -> None:
     assert config.cfp_slots == 0
 
 
+def test_adapt_superframe_never_schedules_beacon_inside_fragment() -> None:
+    """The beacon slot [offset, offset + slot) must itself be WiFi-clear,
+    even if later CAP/CFP slots would otherwise score higher (regression:
+    _best_slot_split used to only check CAP/CFP slots, not the beacon)."""
+    adapter = LWSAAdapter()
+    config = adapter.adapt_superframe(0.0, 60.0, [(0.0, 50.0)])
+    assert config.beacon_offset_ms >= 50.0 or (
+        config.cap_slots == 0 and config.cfp_slots == 0
+    )
+
+
 def test_packet_duration_capped_by_slot_and_hardware() -> None:
     """t_pk (Eq. 8) never exceeds the slot width minus turnaround/ack."""
     small_slot = BASE_SLOT_DURATION_MS  # 0.96 ms
@@ -238,3 +249,53 @@ def test_zc_process_wbeacon_rejects_missing_keys() -> None:
     )
     with pytest.raises(ProtocolError):
         zc.process_wbeacon(incomplete, residual_wifi_fragments=[])
+
+
+def test_offset_candidates_handles_fragment_starting_before_window() -> None:
+    """A fragment that starts before the window but ends inside it must
+    still contribute its end as a candidate beacon offset (regression:
+    the old filter required frag_start >= dur_start_ms)."""
+    candidates = LWSAAdapter._offset_candidates(0.0, 60.0, [(-5.0, 10.0)])
+    assert 10.0 in candidates
+
+
+def test_zc_process_wbeacon_leaves_state_unchanged_on_validation_failure() -> None:
+    """A malformed WBeacon must not leave the coordinator mid-FSM
+    (regression: state used to flip to COMMAND_ACQUISITION before
+    validation)."""
+    from cowic.ctc.channel import CTCMessage, MessageType
+    from cowic.exceptions import ProtocolError
+    from cowic.zigbee.coordinator import ZCState, ZigBeeCoordinator
+
+    zc = ZigBeeCoordinator()
+    assert zc.state is ZCState.IDLE
+    bad_wbeacon = CTCMessage(
+        msg_type=MessageType.ZBEACON, sender_id="ZC_0", timestamp_ms=0.0, payload={}
+    )
+    with pytest.raises(ProtocolError):
+        zc.process_wbeacon(bad_wbeacon, residual_wifi_fragments=[])
+    assert zc.state is ZCState.IDLE
+
+
+def test_zc_process_wbeacon_rejects_nonnumeric_window_boundary() -> None:
+    """A payload with the right keys but a non-numeric boundary value
+    raises ProtocolError, not an unguarded TypeError (regression: a
+    dict[str, float] annotation is not enforced at runtime)."""
+    from cowic.ctc.channel import CTCMessage, MessageType
+    from cowic.exceptions import ProtocolError
+    from cowic.zigbee.coordinator import ZigBeeCoordinator
+
+    zc = ZigBeeCoordinator()
+    bad_wbeacon = CTCMessage(
+        msg_type=MessageType.WBEACON,
+        sender_id="AP_0",
+        timestamp_ms=0.0,
+        payload={
+            "t_free_start_ms": "not-a-number",  # type: ignore[dict-item]
+            "t_free_end_ms": 62.0,
+            "t_sense_start_ms": 62.0,
+            "t_sense_end_ms": 72.0,
+        },
+    )
+    with pytest.raises(ProtocolError):
+        zc.process_wbeacon(bad_wbeacon, residual_wifi_fragments=[])

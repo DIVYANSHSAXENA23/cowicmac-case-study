@@ -215,6 +215,17 @@ class LWSAAdapter:
         residual_wifi_fragments: Sequence[tuple[float, float]],
     ) -> _Candidate | None:
         """Best feasible ``(i, j)`` split for one ``(t_SfSlot, t_offset)`` pair."""
+        if (
+            _count_clear_slots(
+                1,
+                beacon_offset_ms,
+                slot_duration_ms,
+                slot_duration_ms,
+                residual_wifi_fragments,
+            )
+            == 0
+        ):
+            return None
         cap_region_start_ms = beacon_offset_ms + slot_duration_ms
         best: _Candidate | None = None
         for j in range(0, min(MAX_CFP_SLOTS, max_active) + 1):
@@ -268,12 +279,12 @@ class LWSAAdapter:
         residual_wifi_fragments: Sequence[tuple[float, float]],
     ) -> list[float]:
         """Beacon offset candidates: the window start, and the end of each
-        WiFi fragment that starts at or before it - the only points where
-        shifting the beacon later can avoid early interference (Section
-        4.4: "the beacon offset is first adjusted to avoid early
-        interference")."""
+        WiFi fragment overlapping the window and finishing strictly
+        inside it - the only points where shifting the beacon later can
+        avoid early interference (Section 4.4: "the beacon offset is
+        first adjusted to avoid early interference")."""
         candidates = [dur_start_ms]
         for frag_start, frag_end in sorted(residual_wifi_fragments):
-            if dur_start_ms <= frag_start < dur_end_ms and frag_end < dur_end_ms:
+            if frag_start < dur_end_ms and dur_start_ms < frag_end < dur_end_ms:
                 candidates.append(frag_end)
         return sorted(set(candidates))

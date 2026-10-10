@@ -97,9 +97,9 @@ class ZigBeeCoordinator:
         Raises:
             ProtocolError: if ``wbeacon`` is not a well-formed WBeacon.
         """
-        self.state = ZCState.COMMAND_ACQUISITION
         window_start_ms, window_end_ms = _read_window(wbeacon)
 
+        self.state = ZCState.COMMAND_ACQUISITION
         self.state = ZCState.TRAFFIC_ADJUSTMENT
         if window_end_ms <= window_start_ms:
             self.superframe = SuperframeConfig(
@@ -126,11 +126,19 @@ def _read_window(wbeacon: CTCMessage) -> tuple[float, float]:
         raise ProtocolError(f"WBeacon payload missing keys: {missing}")
     start_ms = wbeacon.payload["t_free_start_ms"]
     end_ms = wbeacon.payload["t_free_end_ms"]
-    if not (math.isfinite(start_ms) and math.isfinite(end_ms)):
+    try:
+        is_finite = math.isfinite(start_ms) and math.isfinite(end_ms)
+        precedes_start = end_ms < start_ms
+    except TypeError as exc:
+        raise ProtocolError(
+            f"WBeacon window boundaries must be numeric, "
+            f"got start={start_ms!r}, end={end_ms!r}"
+        ) from exc
+    if not is_finite:
         raise ProtocolError(
             f"WBeacon window must be finite, got start={start_ms}, end={end_ms}"
         )
-    if end_ms < start_ms:
+    if precedes_start:
         raise ProtocolError(
             f"WBeacon free window end ({end_ms}) cannot precede start ({start_ms})"
         )
