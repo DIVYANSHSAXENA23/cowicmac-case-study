@@ -14,11 +14,12 @@ interference-free window. When the request cannot be met in full, the
 sensing window keeps priority because it closes the coordination loop.
 """
 
+import math
 import time
 from collections.abc import Sequence
 
 from cowic.exceptions import ConfigurationError
-from cowic.models.frame_group import FrameGroup, SchedulingDecision
+from cowic.models.frame_group import FrameGroup
 from cowic.wifi.baselines import defer_around_window, find_whitespaces
 from cowic.wifi.milp_scheduler import ScheduleResult
 
@@ -32,11 +33,34 @@ def fallback_whitespace_expansion(
     t_end_ms: float,
     d_free_ms: float,
     d_sensing_ms: float = 0.0,
+    channel_free_at: float = -math.inf,
 ) -> ScheduleResult:
     """Reserve ``d_sensing_ms + d_free_ms`` by using or extending a whitespace.
 
-    No FG is ever postponed: when the full request would force a
-    postponement, the window is shortened instead.
+    When ``channel_free_at`` is ``-inf`` (no carryover), no FG is ever
+    postponed: when the full request would force a postponement, the
+    window is shortened instead. With carryover active, a FG whose natural
+    position falls before ``channel_free_at`` is deferred past it and *can*
+    be postponed if that deferral alone (independent of the reserved
+    window) would miss its deadline or overflow the cycle - it already
+    cannot transmit where it was originally placed.
+
+    ``channel_free_at``: airtime already occupied before any FG in
+    ``frame_groups`` (e.g. a carried-over FG still transmitting at
+    ``t_start_ms``). A FG naturally positioned before it is deferred to
+    start no earlier than ``channel_free_at``, exactly as it would be if it
+    overlapped the reserved window directly - gap search alone (clipping
+    ``find_whitespaces`` to ``[t_start_ms, t_end_ms]``) is not enough, since
+    an FG positioned *before* an already-raised ``t_start_ms`` is invisible
+    to it rather than correctly pushed later.
+
+    A natural-looking "fitting" gap (found via ``find_whitespaces``, which
+    only sees each FG's *original* position) can still force an avoidable
+    postponement once ``channel_free_at`` pushes an earlier FG into it: the
+    first fitting gap tried is skipped in favor of the next one that
+    introduces no postponement beyond the no-window baseline; if none
+    qualify, the extend-the-largest-gap path (:func:`_widest_window`) is
+    used instead, which already applies the same baseline comparison.
     """
     if d_free_ms < 0 or d_sensing_ms < 0:
         raise ConfigurationError(
@@ -47,22 +71,23 @@ def fallback_whitespace_expansion(
     gaps = find_whitespaces(frame_groups, t_start_ms, t_end_ms)
     need = d_sensing_ms + d_free_ms
 
-    fitting = [gap for gap in gaps if gap[1] - gap[0] >= need]
-    if fitting:
-        window_start = fitting[0][0]
-        window_end = window_start + need
+    window = _choose_fitting_gap(frame_groups, gaps, need, t_end_ms, channel_free_at)
+    if window is not None:
+        window_start, window_end = window
     else:
         window_start, gap_end = max(
             gaps, key=lambda gap: gap[1] - gap[0], default=(t_start_ms, t_start_ms)
         )
         target = min(window_start + need, t_end_ms)
         window_end = _widest_window(
-            frame_groups, window_start, gap_end, target, t_end_ms
+            frame_groups, window_start, gap_end, target, t_end_ms, channel_free_at
         )
 
     sense_end = min(window_start + d_sensing_ms, window_end)
     return ScheduleResult(
-        decisions=defer_around_window(frame_groups, window_start, window_end, t_end_ms),
+        decisions=defer_around_window(
+            frame_groups, window_start, window_end, t_end_ms, channel_free_at
+        ),
         t_free_start_ms=sense_end,
         t_free_end_ms=window_end,
         t_sense_start_ms=window_start,
@@ -72,12 +97,74 @@ def fallback_whitespace_expansion(
     )
 
 
+def _baseline_postponed(
+    frame_groups: Sequence[FrameGroup],
+    window_start: float,
+    t_end_ms: float,
+    channel_free_at: float,
+) -> frozenset[int]:
+    """FG ids postponed with no window at all (``channel_free_at`` alone).
+
+    A FG already postponed here (e.g. carryover alone pushes it past its
+    deadline) cannot be "saved" by any choice of window, so it must not
+    count against a candidate window's feasibility.
+    """
+    return frozenset(
+        d.fg_id
+        for d in defer_around_window(
+            frame_groups, window_start, window_start, t_end_ms, channel_free_at
+        )
+        if d.is_postponed
+    )
+
+
+def _feasible(
+    frame_groups: Sequence[FrameGroup],
+    window_start: float,
+    window_end: float,
+    t_end_ms: float,
+    channel_free_at: float,
+    baseline_postponed: frozenset[int],
+) -> bool:
+    """True if this window introduces no postponement beyond the baseline."""
+    decisions = defer_around_window(
+        frame_groups, window_start, window_end, t_end_ms, channel_free_at
+    )
+    return all(not d.is_postponed or d.fg_id in baseline_postponed for d in decisions)
+
+
+def _choose_fitting_gap(
+    frame_groups: Sequence[FrameGroup],
+    gaps: list[tuple[float, float]],
+    need: float,
+    t_end_ms: float,
+    channel_free_at: float,
+) -> tuple[float, float] | None:
+    """Earliest gap (by original FG positions) that fits ``need`` without
+    introducing a postponement beyond the no-window baseline, or ``None``
+    if no fitting gap qualifies."""
+    fitting = [gap for gap in gaps if gap[1] - gap[0] >= need]
+    if not fitting:
+        return None
+    baseline = _baseline_postponed(
+        frame_groups, fitting[0][0], t_end_ms, channel_free_at
+    )
+    for gap_start, _ in fitting:
+        window_end = gap_start + need
+        if _feasible(
+            frame_groups, gap_start, window_end, t_end_ms, channel_free_at, baseline
+        ):
+            return gap_start, window_end
+    return None
+
+
 def _widest_window(
     frame_groups: Sequence[FrameGroup],
     window_start: float,
     safe_end: float,
     target_end: float,
     t_end_ms: float,
+    channel_free_at: float = -math.inf,
 ) -> float:
     """Largest feasible window end in ``[safe_end, target_end]``.
 
@@ -86,12 +173,23 @@ def _widest_window(
     itself now overlap ``safe_end``, forcing a further, otherwise-avoidable
     postponement. If even ``safe_end`` is infeasible, return ``window_start``
     (an empty window) instead, so the fallback never introduces a
-    postponement that would not occur without it.
+    postponement that would not occur without it. See
+    :func:`fallback_whitespace_expansion` for ``channel_free_at``.
+
+    Feasibility is judged against a no-window baseline (``channel_free_at``
+    alone, no reserved interval): an FG already postponed there - e.g. one
+    that carryover alone pushes past its deadline - cannot be "saved" by
+    shrinking the window, so it must not count against the window's size.
+    Only postponements the window itself newly introduces are disqualifying.
     """
+    baseline = _baseline_postponed(
+        frame_groups, window_start, t_end_ms, channel_free_at
+    )
 
     def feasible(end: float) -> bool:
-        decisions = defer_around_window(frame_groups, window_start, end, t_end_ms)
-        return not _any_postponed(decisions)
+        return _feasible(
+            frame_groups, window_start, end, t_end_ms, channel_free_at, baseline
+        )
 
     if feasible(target_end):
         return target_end
@@ -105,7 +203,3 @@ def _widest_window(
         else:
             high = mid
     return low
-
-
-def _any_postponed(decisions: list[SchedulingDecision]) -> bool:
-    return any(decision.is_postponed for decision in decisions)

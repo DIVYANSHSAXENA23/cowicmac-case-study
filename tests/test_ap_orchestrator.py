@@ -8,6 +8,7 @@ from cowic.ctc.channel import CTCMessage, MessageType
 from cowic.exceptions import ConfigurationError, ProtocolError, TraceError
 from cowic.models.frame_group import FrameGroup, SchedulingDecision
 from cowic.wifi.ap_orchestrator import (
+    CARRYOVER_BUSY_STATUS,
     WBEACON_KEYS,
     ZBEACON_DEMAND_KEY,
     APOrchestrator,
@@ -15,6 +16,8 @@ from cowic.wifi.ap_orchestrator import (
 )
 from cowic.wifi.fallback import FALLBACK_STATUS
 from cowic.wifi.milp_scheduler import ScheduleResult
+from traces.playback import frame_groups_from_frame, iter_cycles
+from traces.synthetic_generator import build_trace, load_profile
 
 FGS = [
     FrameGroup(
@@ -218,3 +221,98 @@ def test_invalid_configuration() -> None:
     with pytest.raises(ConfigurationError):
         ap.process_cycle(FGS, 100.0, 100.0, None)
     assert ap.state is APState.MAINTAINING
+
+
+def _fg(fg_id: int, start: float, duration: float) -> FrameGroup:
+    return FrameGroup(fg_id, start, duration, start + duration + 100.0, start, False)
+
+
+def test_fallback_window_starts_after_carryover() -> None:
+    # FG 9 started in the previous cycle and is on air until 110.
+    ap = APOrchestrator(FakeCTC())
+    outcome = ap.process_cycle(
+        [], 100.0, 200.0, _zbeacon(30.0), carryover=[_fg(9, 95.0, 15.0)]
+    )
+    assert outcome.used_fallback
+    assert (outcome.schedule.t_free_start_ms, outcome.schedule.t_free_end_ms) == (
+        110.0,
+        140.0,
+    )
+    assert outcome.wbeacon.timestamp_ms == 100.0
+
+
+def test_scheduler_horizon_starts_after_carryover() -> None:
+    scheduler = FakeScheduler()
+    ap = APOrchestrator(FakeCTC(), scheduler)
+    carryover = [_fg(8, 80.0, 25.0), _fg(9, 95.0, 15.0)]
+    ap.process_cycle([], 100.0, 200.0, _zbeacon(30.0), carryover=carryover)
+    assert scheduler.calls == [(30.0, 0.0, 110.0, 200.0)]
+
+
+def test_finished_carryover_does_not_shift_horizon() -> None:
+    scheduler = FakeScheduler()
+    ap = APOrchestrator(FakeCTC(), scheduler)
+    ap.process_cycle([], 100.0, 200.0, _zbeacon(), carryover=[_fg(9, 50.0, 10.0)])
+    assert scheduler.calls[0][2] == 100.0
+
+
+def test_carryover_filling_cycle_grants_no_window() -> None:
+    # FG 1 ([10, 20]) is entirely swallowed by carryover FG 9's span
+    # ([-10, 140]): it cannot transmit this cycle and must be postponed,
+    # not silently reported as transmitted unchanged.
+    scheduler = FakeScheduler()
+    ap = APOrchestrator(FakeCTC(), scheduler)
+    outcome = ap.process_cycle(
+        FGS, 0.0, 100.0, _zbeacon(30.0), carryover=[_fg(9, -10.0, 150.0)]
+    )
+    assert scheduler.calls == []
+    assert not outcome.used_fallback
+    assert outcome.schedule.solver_status == CARRYOVER_BUSY_STATUS
+    assert outcome.schedule.t_free_start_ms == outcome.schedule.t_free_end_ms
+    (decision,) = outcome.schedule.decisions
+    assert decision.is_postponed is True
+    assert decision.scheduled_start_ms == 100.0
+    assert decision.delay_ms == 90.0
+    assert ap.state is APState.MAINTAINING
+
+
+def test_carryover_filling_cycle_leaves_non_overlapping_fg_untouched() -> None:
+    # FG 1 ([10, 20]) does not overlap a carryover FG confined to [60, 160):
+    # even though carryover fills the cycle to its end, FG 1's own slot was
+    # never in conflict with it and its decision stays unchanged.
+    scheduler = FakeScheduler()
+    ap = APOrchestrator(FakeCTC(), scheduler)
+    outcome = ap.process_cycle(
+        FGS, 0.0, 100.0, _zbeacon(30.0), carryover=[_fg(9, 60.0, 100.0)]
+    )
+    assert outcome.schedule.solver_status == CARRYOVER_BUSY_STATUS
+    (decision,) = outcome.schedule.decisions
+    assert decision.is_postponed is False
+    assert decision.scheduled_start_ms == 10.0
+    assert decision.delay_ms == 0.0
+
+
+@pytest.mark.parametrize("profile", ["Traffic_I", "Traffic_II"])
+def test_windows_never_overlap_live_wifi_on_real_trace(profile: str) -> None:
+    fgs = frame_groups_from_frame(build_trace(load_profile(profile), 20.0))
+    ap = APOrchestrator(FakeCTC(), d_sensing_ms=10.0)
+    for cycle in iter_cycles(fgs, cycle_ms=1000.0):
+        outcome = ap.process_cycle(
+            cycle.frame_groups,
+            cycle.start_ms,
+            cycle.end_ms,
+            _zbeacon(62.0),
+            carryover=cycle.active_carryover,
+        )
+        start = outcome.schedule.t_sense_start_ms
+        end = outcome.schedule.t_free_end_ms
+        if end <= start:
+            continue
+        for fg in cycle.active_carryover:
+            assert fg.original_start_ms + fg.duration_ms <= start + 1e-9
+        by_id = {fg.fg_id: fg for fg in cycle.frame_groups}
+        for d in outcome.schedule.decisions:
+            if d.is_postponed:
+                continue
+            fg_end = d.scheduled_start_ms + by_id[d.fg_id].duration_ms
+            assert fg_end <= start + 1e-9 or d.scheduled_start_ms >= end - 1e-9
