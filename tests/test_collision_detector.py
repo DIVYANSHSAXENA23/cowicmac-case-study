@@ -107,6 +107,22 @@ def test_successful_and_failed_transmission_filters() -> None:
     assert failed_ids == {"A", "B"}
 
 
+def test_filters_are_sorted_by_start_time_regardless_of_registration_order() -> None:
+    """A later-registered but earlier-starting burst still sorts first."""
+    medium = ChannelMedium()
+    medium.register_transmission("LATE_REG", "WiFi", start_ms=0.0, duration_ms=5.0)
+    medium.register_transmission("EARLY_REG", "WiFi", start_ms=50.0, duration_ms=5.0)
+    medium.register_transmission("MID_REG", "WiFi", start_ms=20.0, duration_ms=5.0)
+
+    starts = [r.start_time_ms for r in medium.successful_transmissions()]
+    assert starts == sorted(starts)
+    assert [r.trans_id for r in medium.successful_transmissions()] == [
+        "LATE_REG",
+        "MID_REG",
+        "EARLY_REG",
+    ]
+
+
 def test_reset_clears_transmission_log() -> None:
     """reset() clears stored transmissions so a medium can be reused."""
     medium = ChannelMedium()

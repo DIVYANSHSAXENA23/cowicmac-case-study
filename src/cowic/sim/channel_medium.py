@@ -60,11 +60,14 @@ def _intervals_overlap(
 class ChannelMedium:
     """Detects temporal overlaps between concurrent transmissions.
 
-    Transmissions are stored in registration order in ``self.transmissions``.
-    Call :meth:`register_transmission` once per burst as the simulation
-    advances; registration order does not need to match start time order
-    (e.g. a short ZigBee packet registered after a longer WiFi FG that
-    started earlier is still checked against it).
+    Transmissions are stored in registration order in ``self.transmissions``
+    (``record()``'s id lookup relies on this order staying stable). Call
+    :meth:`register_transmission` once per burst as the simulation advances;
+    registration order does not need to match start time order (e.g. a short
+    ZigBee packet registered after a longer WiFi FG that started earlier is
+    still checked against it). :meth:`successful_transmissions` and
+    :meth:`failed_transmissions` return their results sorted by
+    ``start_time_ms`` regardless of registration order.
     """
 
     def __init__(self) -> None:
@@ -131,12 +134,18 @@ class ChannelMedium:
         return self.transmissions[self._index_by_id[trans_id]]
 
     def successful_transmissions(self) -> list[TransmissionRecord]:
-        """Return all collision-free transmissions registered so far."""
-        return [record for record in self.transmissions if record.success]
+        """Collision-free transmissions registered so far, start-time order."""
+        return sorted(
+            (r for r in self.transmissions if r.success),
+            key=lambda r: r.start_time_ms,
+        )
 
     def failed_transmissions(self) -> list[TransmissionRecord]:
-        """Return all corrupted (colliding) transmissions registered so far."""
-        return [record for record in self.transmissions if not record.success]
+        """Corrupted (colliding) transmissions registered so far, start-time order."""
+        return sorted(
+            (r for r in self.transmissions if not r.success),
+            key=lambda r: r.start_time_ms,
+        )
 
     def reset(self) -> None:
         """Clear all registered transmissions, for reuse across scenarios."""
