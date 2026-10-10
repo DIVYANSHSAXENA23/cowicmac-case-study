@@ -19,7 +19,7 @@ import time
 from collections.abc import Sequence
 
 from cowic.exceptions import ConfigurationError
-from cowic.models.frame_group import FrameGroup, SchedulingDecision
+from cowic.models.frame_group import FrameGroup
 from cowic.wifi.baselines import defer_around_window, find_whitespaces
 from cowic.wifi.milp_scheduler import ScheduleResult
 
@@ -107,13 +107,28 @@ def _widest_window(
     (an empty window) instead, so the fallback never introduces a
     postponement that would not occur without it. See
     :func:`fallback_whitespace_expansion` for ``channel_free_at``.
+
+    Feasibility is judged against a no-window baseline (``channel_free_at``
+    alone, no reserved interval): an FG already postponed there - e.g. one
+    that carryover alone pushes past its deadline - cannot be "saved" by
+    shrinking the window, so it must not count against the window's size.
+    Only postponements the window itself newly introduces are disqualifying.
     """
+    baseline_postponed = {
+        d.fg_id
+        for d in defer_around_window(
+            frame_groups, window_start, window_start, t_end_ms, channel_free_at
+        )
+        if d.is_postponed
+    }
 
     def feasible(end: float) -> bool:
         decisions = defer_around_window(
             frame_groups, window_start, end, t_end_ms, channel_free_at
         )
-        return not _any_postponed(decisions)
+        return all(
+            not d.is_postponed or d.fg_id in baseline_postponed for d in decisions
+        )
 
     if feasible(target_end):
         return target_end
@@ -127,7 +142,3 @@ def _widest_window(
         else:
             high = mid
     return low
-
-
-def _any_postponed(decisions: list[SchedulingDecision]) -> bool:
-    return any(decision.is_postponed for decision in decisions)

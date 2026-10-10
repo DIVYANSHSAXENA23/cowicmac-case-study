@@ -67,26 +67,51 @@ def test_extension_stops_before_a_deadline_miss() -> None:
     assert not any(d.is_postponed for d in result.decisions)
 
 
-def test_widest_window_never_returns_an_infeasible_safe_end() -> None:
+def test_widest_window_ignores_preexisting_unrelated_postponement() -> None:
     # FG 1 sits in its own clean slot before the target gap. FG 2 and FG 3
     # already conflict with each other in their *original* positions (FG 3
-    # starts at 63, before FG 2's natural end at 65) - a pre-existing, window-
-    # unrelated deadline miss. The largest natural gap is [10, 60] (width 50);
-    # a 55ms request cannot fit, forcing the extend path with
-    # safe_end=60. Before the fix, _widest_window returned safe_end (or a
-    # value found by bisecting towards it) whenever _any_postponed was true
-    # for every candidate tested, even though that postponement has nothing
-    # to do with the window - silently reporting a "clear" window that
-    # wasn't. The fix must fall back to returning window_start (no
-    # window) rather than asserting a window end it cannot verify is
-    # genuinely postponement-free.
+    # starts at 63, before FG 2's natural end at 65), pushing FG 3 past its
+    # deadline regardless of any window - a pre-existing, window-unrelated
+    # postponement. The largest natural gap is [10, 60] (width 50); a 55ms
+    # request cannot fit, forcing the extend path with safe_end=60.
+    #
+    # Feasibility is judged against a no-window baseline: FG 3's
+    # postponement already exists there, so it must not block extending
+    # the window. FG 2's natural slot does conflict with an extended
+    # window, so the window grows only until FG 2 would miss its own
+    # deadline (bisection finds that boundary, just under 61 ms here).
     fgs = [
         _fg(1, 0.0, 10.0, bound=190.0),
         _fg(2, 60.0, 5.0, bound=1.0),
         _fg(3, 63.0, 5.0, bound=1.0),
     ]
     result = fallback_whitespace_expansion(fgs, 0.0, 100.0, 55.0)
-    assert result.t_free_start_ms == result.t_free_end_ms == 10.0
+    assert result.t_free_start_ms == 10.0
+    assert result.t_free_end_ms == pytest.approx(61.0, abs=1e-6)
+    by_id = {d.fg_id: d for d in result.decisions}
+    assert by_id[2].is_postponed is False  # window stops just short of its deadline
+    assert by_id[3].is_postponed is True  # pre-existing conflict, unrelated to window
+
+
+def test_widest_window_reclaims_gap_despite_carryover_forced_postponement() -> None:
+    # CodeRabbit's reported scenario: a 100-200ms cycle, channel_free_at=110
+    # (carryover), a FG at 100-105ms due at 108ms (carryover alone already
+    # pushes it past its deadline - postponed regardless of any window),
+    # and a second FG at 160-170ms. The 110-160ms idle gap must not be lost
+    # just because the first FG was always going to be postponed.
+    carryover_only_postponed = _fg(1, 100.0, 5.0, bound=3.0)  # due 108
+    clear_fg = _fg(2, 160.0, 10.0, bound=100.0)
+    result = fallback_whitespace_expansion(
+        [carryover_only_postponed, clear_fg],
+        100.0,
+        200.0,
+        d_free_ms=50.0,
+        channel_free_at=110.0,
+    )
+    assert result.t_free_end_ms - result.t_free_start_ms == 50.0
+    by_id = {d.fg_id: d for d in result.decisions}
+    assert by_id[1].is_postponed is True  # carryover alone already did this
+    assert by_id[2].is_postponed is False
 
 
 def test_sensing_keeps_priority_when_window_is_short() -> None:
