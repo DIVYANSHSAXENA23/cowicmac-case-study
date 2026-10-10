@@ -53,6 +53,14 @@ def fallback_whitespace_expansion(
     ``find_whitespaces`` to ``[t_start_ms, t_end_ms]``) is not enough, since
     an FG positioned *before* an already-raised ``t_start_ms`` is invisible
     to it rather than correctly pushed later.
+
+    A natural-looking "fitting" gap (found via ``find_whitespaces``, which
+    only sees each FG's *original* position) can still force an avoidable
+    postponement once ``channel_free_at`` pushes an earlier FG into it: the
+    first fitting gap tried is skipped in favor of the next one that
+    introduces no postponement beyond the no-window baseline; if none
+    qualify, the extend-the-largest-gap path (:func:`_widest_window`) is
+    used instead, which already applies the same baseline comparison.
     """
     if d_free_ms < 0 or d_sensing_ms < 0:
         raise ConfigurationError(
@@ -63,10 +71,9 @@ def fallback_whitespace_expansion(
     gaps = find_whitespaces(frame_groups, t_start_ms, t_end_ms)
     need = d_sensing_ms + d_free_ms
 
-    fitting = [gap for gap in gaps if gap[1] - gap[0] >= need]
-    if fitting:
-        window_start = fitting[0][0]
-        window_end = window_start + need
+    window = _choose_fitting_gap(frame_groups, gaps, need, t_end_ms, channel_free_at)
+    if window is not None:
+        window_start, window_end = window
     else:
         window_start, gap_end = max(
             gaps, key=lambda gap: gap[1] - gap[0], default=(t_start_ms, t_start_ms)
@@ -88,6 +95,67 @@ def fallback_whitespace_expansion(
         solver_status=FALLBACK_STATUS,
         solve_time_ms=(time.perf_counter() - began) * 1000.0,
     )
+
+
+def _baseline_postponed(
+    frame_groups: Sequence[FrameGroup],
+    window_start: float,
+    t_end_ms: float,
+    channel_free_at: float,
+) -> frozenset[int]:
+    """FG ids postponed with no window at all (``channel_free_at`` alone).
+
+    A FG already postponed here (e.g. carryover alone pushes it past its
+    deadline) cannot be "saved" by any choice of window, so it must not
+    count against a candidate window's feasibility.
+    """
+    return frozenset(
+        d.fg_id
+        for d in defer_around_window(
+            frame_groups, window_start, window_start, t_end_ms, channel_free_at
+        )
+        if d.is_postponed
+    )
+
+
+def _feasible(
+    frame_groups: Sequence[FrameGroup],
+    window_start: float,
+    window_end: float,
+    t_end_ms: float,
+    channel_free_at: float,
+    baseline_postponed: frozenset[int],
+) -> bool:
+    """True if this window introduces no postponement beyond the baseline."""
+    decisions = defer_around_window(
+        frame_groups, window_start, window_end, t_end_ms, channel_free_at
+    )
+    return all(not d.is_postponed or d.fg_id in baseline_postponed for d in decisions)
+
+
+def _choose_fitting_gap(
+    frame_groups: Sequence[FrameGroup],
+    gaps: list[tuple[float, float]],
+    need: float,
+    t_end_ms: float,
+    channel_free_at: float,
+) -> tuple[float, float] | None:
+    """Earliest gap (by original FG positions) that fits ``need`` without
+    introducing a postponement beyond the no-window baseline, or ``None``
+    if no fitting gap qualifies."""
+    fitting = [gap for gap in gaps if gap[1] - gap[0] >= need]
+    if not fitting:
+        return None
+    baseline = _baseline_postponed(
+        frame_groups, fitting[0][0], t_end_ms, channel_free_at
+    )
+    for gap_start, _ in fitting:
+        window_end = gap_start + need
+        if _feasible(
+            frame_groups, gap_start, window_end, t_end_ms, channel_free_at, baseline
+        ):
+            return gap_start, window_end
+    return None
 
 
 def _widest_window(
@@ -114,20 +182,13 @@ def _widest_window(
     shrinking the window, so it must not count against the window's size.
     Only postponements the window itself newly introduces are disqualifying.
     """
-    baseline_postponed = {
-        d.fg_id
-        for d in defer_around_window(
-            frame_groups, window_start, window_start, t_end_ms, channel_free_at
-        )
-        if d.is_postponed
-    }
+    baseline = _baseline_postponed(
+        frame_groups, window_start, t_end_ms, channel_free_at
+    )
 
     def feasible(end: float) -> bool:
-        decisions = defer_around_window(
-            frame_groups, window_start, end, t_end_ms, channel_free_at
-        )
-        return all(
-            not d.is_postponed or d.fg_id in baseline_postponed for d in decisions
+        return _feasible(
+            frame_groups, window_start, end, t_end_ms, channel_free_at, baseline
         )
 
     if feasible(target_end):

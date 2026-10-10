@@ -114,6 +114,32 @@ def test_widest_window_reclaims_gap_despite_carryover_forced_postponement() -> N
     assert by_id[2].is_postponed is False
 
 
+def test_fitting_gap_does_not_postpone_fg_that_carryover_alone_keeps_on_time() -> None:
+    # CodeRabbit's reported "fitting gap" scenario: a 100-200ms cycle,
+    # channel_free_at=110, a FG at 100-105ms due at 130ms (carryover alone
+    # does NOT miss its deadline: pushed to 110, ends 115 <= 130), and a
+    # second FG at 160-170ms. find_whitespaces (unaware of channel_free_at)
+    # reports [105, 160] as one 55ms gap; naively taking window [105, 155]
+    # would sweep up the carryover-pushed FG and force an avoidable
+    # postponement (115 -> window_end=155, ending at 160 > deadline 130).
+    # The fallback must not do that: it may fall back to an empty window
+    # (the idle time past the carryover-pushed FG isn't found by the
+    # carryover-unaware gap search), but it must never introduce a
+    # postponement that channel_free_at alone would not have caused.
+    carryover_pushed_on_time = _fg(1, 100.0, 5.0, bound=25.0)  # due 130
+    clear_fg = _fg(2, 160.0, 10.0, bound=100.0)
+    result = fallback_whitespace_expansion(
+        [carryover_pushed_on_time, clear_fg],
+        100.0,
+        200.0,
+        d_free_ms=50.0,
+        channel_free_at=110.0,
+    )
+    by_id = {d.fg_id: d for d in result.decisions}
+    assert by_id[1].is_postponed is False
+    assert by_id[1].scheduled_start_ms == 110.0
+
+
 def test_sensing_keeps_priority_when_window_is_short() -> None:
     fgs = [_fg(1, 0.0, 10.0, bound=0.0), _fg(2, 16.0, 84.0, bound=0.0)]
     result = fallback_whitespace_expansion(fgs, 0.0, 100.0, 62.0, 10.0)
