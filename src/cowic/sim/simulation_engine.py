@@ -14,8 +14,11 @@ Experiment variation (Exp 1-6, Table 4) is driven entirely by
 (a baseline function wrapped in :class:`_BaselineScheduler`, or
 :class:`~cowic.wifi.milp_scheduler.MILPScheduler`), ``ctc_direction``
 controls whether a ZBeacon is sent each cycle, and ``zigbee_adaptation``
-controls whether the ZC runs L-WSA (``"lwsa"``) or ignores the WBeacon and
-keeps a fixed, non-adaptive superframe (``"fixed"``).
+controls whether the ZC runs L-WSA (``"lwsa"``) or keeps a fixed,
+non-adaptive superframe (``"fixed"``). A fixed superframe is never resized,
+but when CTC delivers a WBeacon (Exp 2/3/5) it starts at the announced
+window, since those schemes notify ZigBee where to transmit; without CTC
+(Exp 1) it stays anchored at the cycle start.
 """
 
 from dataclasses import dataclass
@@ -230,16 +233,35 @@ def _residual_wifi_fragments(
     return fragments
 
 
-def _fixed_superframe(cycle_start_ms: float) -> SuperframeConfig:
-    """A legacy, WiFi-oblivious superframe for ``zigbee_adaptation: "fixed"``."""
+def _fixed_superframe(anchor_ms: float) -> SuperframeConfig:
+    """A legacy, non-adaptive superframe beaconing at ``anchor_ms``."""
     return SuperframeConfig(
         slot_duration_ms=_FIXED_SLOT_DURATION_MS,
         cap_slots=_FIXED_CAP_SLOTS,
         cfp_slots=_FIXED_CFP_SLOTS,
-        beacon_offset_ms=cycle_start_ms,
+        beacon_offset_ms=anchor_ms,
         beacon_interval_ms=(1 + _FIXED_CAP_SLOTS + _FIXED_CFP_SLOTS)
         * _FIXED_SLOT_DURATION_MS,
     )
+
+
+def _fixed_anchor_ms(
+    config: SimulationConfig, outcome: CycleOutcome, cycle_start_ms: float
+) -> float:
+    """Where a fixed superframe starts this cycle.
+
+    Exp 2/3/5 notify ZigBee of the reserved window over WiFi->ZigBee CTC
+    (Table 4); the ZC keeps its fixed structure but transmits there. With no
+    CTC (Exp 1), a lost WBeacon, or an empty window, ZigBee has nothing to
+    follow and stays at the cycle start. The superframe is not shrunk, so
+    slots running past a short window (e.g. ECC's 40 ms NAV cap) still meet
+    WiFi, which is the cost of not adapting.
+    """
+    schedule = outcome.schedule
+    notified = config.ctc_direction != "none" and outcome.wbeacon_delivered
+    if notified and schedule.t_free_end_ms > schedule.t_free_start_ms:
+        return schedule.t_free_start_ms
+    return cycle_start_ms
 
 
 def _synthesize_zigbee_packets(
@@ -393,6 +415,11 @@ class SimulationEngine:
             d_sensing_ms=config.d_sensing_ms,
             optimal_statuses=optimal_statuses,
         )
+        if config.ctc_direction != "bidirectional":
+            # No ZBeacon channel (Exp 1/2/5/6), so the AP can't learn ZigBee's
+            # demand over CTC; it uses the experiment's configured D_free.
+            # Otherwise demand stays 0 and the AP grants empty windows.
+            ap.demand_ms = config.d_free_ms
         lwsa = LWSAAdapter()
         zc = ZigBeeCoordinator(lwsa=lwsa)
         stats = _RunStats()
@@ -474,7 +501,9 @@ class SimulationEngine:
                 stats.csma_ca_fallback_cycles += 1
                 superframe = _fixed_superframe(cycle.start_ms)
             else:
-                superframe = _fixed_superframe(cycle.start_ms)
+                superframe = _fixed_superframe(
+                    _fixed_anchor_ms(config, outcome, cycle.start_ms)
+                )
 
             for packet in _synthesize_zigbee_packets(
                 superframe, cycle.index, zc.lwsa.desired_packet_duration_ms
