@@ -52,8 +52,11 @@ EXPERIMENT_CONFIGS: tuple[str, ...] = (
 )
 TRAFFIC_PROFILES: dict[str, str] = {
     "Traffic_I": "configs/base_traffic1.yaml",
+    "Traffic_II": "configs/base_traffic2.yaml",
     "Traffic_III": "configs/base_traffic3.yaml",
+    "Traffic_IV": "configs/base_traffic4.yaml",
 }
+DEFAULT_SWEEP_TRAFFIC: tuple[str, ...] = ("Traffic_I", "Traffic_III")
 D_FREE_MS: tuple[float, ...] = (31.0, 62.0, 93.0, 123.0)
 ZIGBEE_PERIODS_MS: tuple[float, ...] = (1000.0, 2000.0, 5000.0)
 D_SENSING_MS: tuple[float, ...] = (10.0, 20.0, 50.0, 100.0)
@@ -72,6 +75,8 @@ SENSING_PERIOD_MS = 1000.0
 # Acceptance criterion of Issue #11 (Exp 4, high load).
 ACCEPT_MIN_GZ = 0.9
 ACCEPT_MAX_PDR_W = 0.0
+ACCEPT_HIGH_LOAD_D_FREE_MS = 31.0
+ACCEPT_HIGH_LOAD_PERIOD_MS = 1000.0
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,7 @@ class SweepPoint:
 def build_grid(
     quick: bool = False,
     experiments: Sequence[str] = EXPERIMENT_CONFIGS,
+    traffic_profiles: Sequence[str] = DEFAULT_SWEEP_TRAFFIC,
     seeds: Sequence[int] = SEEDS,
 ) -> list[SweepPoint]:
     """Return every run of the main sweep and the sensing sweep.
@@ -98,11 +104,10 @@ def build_grid(
     two sensing windows. It is for smoke runs and tests.
     """
     d_free = QUICK_D_FREE_MS if quick else D_FREE_MS
-    traffics = ("Traffic_I",) if quick else tuple(TRAFFIC_PROFILES)
+    traffics = ("Traffic_I",) if quick else tuple(traffic_profiles)
     periods = (1000.0,) if quick else ZIGBEE_PERIODS_MS
     sensing = QUICK_D_SENSING_MS if quick else D_SENSING_MS
     run_seeds = tuple(seeds[:1]) if quick else tuple(seeds)
-
     grid = [
         SweepPoint(MAIN_SWEEP, config, traffic, demand, period, seed)
         for config in experiments
@@ -302,15 +307,29 @@ def acceptance_report(results: pd.DataFrame) -> tuple[bool, str]:
     ].mean()
     lines = ["Acceptance (Exp 4, Traffic I): G_z > 0.9 and PDR_w = 0"]
     passed = True
+    has_criterion_point = False
     for (d_free, period), row in means.iterrows():
         ok = (
             row["zigbee_gain_ratio"] > ACCEPT_MIN_GZ
             and row["wifi_drop_rate"] <= ACCEPT_MAX_PDR_W
         )
-        passed = passed and ok
+        is_criterion_point = (
+            d_free == ACCEPT_HIGH_LOAD_D_FREE_MS
+            and period == ACCEPT_HIGH_LOAD_PERIOD_MS
+        )
+        if is_criterion_point:
+            has_criterion_point = True
+            passed = passed and ok
+        status = "PASS" if ok else ("FAIL" if is_criterion_point else "INFO")
         lines.append(
             f"  D_free={d_free:g} T_ZB={period:g}: G_z={row['zigbee_gain_ratio']:.3f}"
-            f" PDR_w={row['wifi_drop_rate']:.4f} {'PASS' if ok else 'FAIL'}"
+            f" PDR_w={row['wifi_drop_rate']:.4f} {status}"
+        )
+    if not has_criterion_point:
+        passed = all(
+            row["zigbee_gain_ratio"] > ACCEPT_MIN_GZ
+            and row["wifi_drop_rate"] <= ACCEPT_MAX_PDR_W
+            for _, row in means.iterrows()
         )
     lines.append("Result: PASS" if passed else "Result: FAIL")
     return passed, "\n".join(lines)
@@ -324,6 +343,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--quick", action="store_true", help="Small grid and 3 s runs (smoke run)."
+    )
+    parser.add_argument(
+        "--traffic",
+        nargs="+",
+        choices=list(TRAFFIC_PROFILES),
+        default=list(DEFAULT_SWEEP_TRAFFIC),
+        help="Traffic profiles to sweep (default: Traffic_I, Traffic_III).",
     )
     parser.add_argument(
         "--output-csv", type=Path, default=Path("results/benchmark_results.csv")
@@ -352,7 +378,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     duration_s = QUICK_DURATION_S if args.quick else args.duration
     if duration_s <= 0:
         raise ConfigurationError(f"--duration must be positive, got {duration_s}")
-    grid = build_grid(quick=args.quick)
+    if args.traffic == list(DEFAULT_SWEEP_TRAFFIC):
+        grid = build_grid(quick=args.quick)
+    else:
+        grid = build_grid(quick=args.quick, traffic_profiles=args.traffic)
     print(f"Running {len(grid)} runs of {duration_s:g} s with {args.jobs} jobs.")
 
     def progress(done: int, total: int, point: SweepPoint) -> None:

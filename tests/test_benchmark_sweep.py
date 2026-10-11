@@ -52,6 +52,14 @@ def test_quick_grid_is_small() -> None:
     assert len({p.seed for p in grid}) == 1
 
 
+def test_grid_supports_all_four_traffic_profiles() -> None:
+    all_traffics = tuple(sweep.TRAFFIC_PROFILES)
+    assert set(all_traffics) == {"Traffic_I", "Traffic_II", "Traffic_III", "Traffic_IV"}
+    grid = sweep.build_grid(traffic_profiles=all_traffics)
+    main = [p for p in grid if p.sweep == sweep.MAIN_SWEEP]
+    assert {p.traffic for p in main} == set(all_traffics)
+
+
 def test_run_point_returns_plotter_ready_row(tmp_path: Path) -> None:
     row = sweep.run_point(FAST_POINTS[0], duration_s=2.0, trace_dir=tmp_path)
     for column in REQUIRED_COLUMNS:
