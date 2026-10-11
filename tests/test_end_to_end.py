@@ -1,11 +1,16 @@
 """Integration tests for end-to-end coexistence scenarios."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from cowic.exceptions import ConfigurationError
-from cowic.sim.simulation_engine import SimulationConfig, SimulationEngine
+from cowic.sim.simulation_engine import (
+    SimulationConfig,
+    SimulationEngine,
+    _pending_packets,
+)
 from traces.synthetic_generator import generate_trace
 
 
@@ -420,3 +425,72 @@ def test_delivered_wifi_fg_ids_raises_before_run() -> None:
     engine = SimulationEngine(config)
     with pytest.raises(RuntimeError):
         engine.delivered_wifi_fg_ids()
+
+
+def _exp4_config(trace: Path, d_free_ms: float = 62.0) -> SimulationConfig:
+    return SimulationConfig(
+        scenario_name="Test_Exp4",
+        duration_s=3.0,
+        wifi_trace_path=trace,
+        d_free_ms=d_free_ms,
+        d_sensing_ms=10.0,
+        zigbee_period_ms=1000.0,
+        wifi_scheduling="milp_soft_constraint",
+        ctc_direction="bidirectional",
+        zigbee_adaptation="lwsa",
+    )
+
+
+def test_postponed_fgs_are_carried_not_transmitted(short_trace: Path) -> None:
+    """A postponed FG must not go on air in the cycle that postponed it, so
+    WiFi never collides with WiFi."""
+    engine = SimulationEngine(_exp4_config(short_trace))
+    engine.run()
+    assert engine.last_medium is not None
+    wifi = sorted(
+        (r for r in engine.last_medium.transmissions if r.protocol == "wifi"),
+        key=lambda r: r.start_time_ms,
+    )
+    for earlier, later in zip(wifi, wifi[1:], strict=False):
+        assert later.start_time_ms >= earlier.end_time_ms - 1e-3
+    on_air = [d for d in engine.last_decisions if not d.is_postponed]
+    assert len(on_air) == len(wifi)
+    assert len({d.fg_id for d in on_air}) == len(on_air)
+
+
+def test_last_decisions_measure_delay_from_true_origin(short_trace: Path) -> None:
+    engine = SimulationEngine(_exp4_config(short_trace))
+    engine.run()
+    assert engine.last_decisions
+    for decision in engine.last_decisions:
+        fg = engine.last_frame_groups[decision.fg_id]
+        expected = max(0.0, decision.scheduled_start_ms - fg.original_start_ms)
+        assert decision.delay_ms == pytest.approx(expected)
+
+
+def test_zbeacon_demand_follows_d_free(short_trace: Path) -> None:
+    """Bidirectional runs must honour the configured D_free (paper sweep)."""
+    delivered = []
+    for d_free in (31.0, 93.0):
+        engine = SimulationEngine(_exp4_config(short_trace, d_free))
+        engine.run()
+        assert engine.last_medium is not None
+        delivered.append(
+            sum(
+                r.end_time_ms - r.start_time_ms
+                for r in engine.last_medium.successful_transmissions()
+                if r.protocol == "zigbee"
+            )
+        )
+    assert delivered[1] > delivered[0]
+
+
+def test_pending_packets_derived_from_d_free_unless_overridden(
+    short_trace: Path,
+) -> None:
+    config = _exp4_config(short_trace, 62.0)
+    assert _pending_packets(config, 2.0) == 31
+    assert _pending_packets(replace(config, d_free_ms=61.0), 2.0) == 31
+    assert _pending_packets(replace(config, zigbee_pending_packets=5), 2.0) == 5
+    with pytest.raises(ConfigurationError):
+        _pending_packets(config, 0.0)
