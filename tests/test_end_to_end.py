@@ -455,7 +455,20 @@ def test_postponed_fgs_are_carried_not_transmitted(short_trace: Path) -> None:
         assert later.start_time_ms >= earlier.end_time_ms - 1e-3
     on_air = [d for d in engine.last_decisions if not d.is_postponed]
     assert len(on_air) == len(wifi)
-    assert len({d.fg_id for d in on_air}) == len(on_air)
+
+
+def test_last_decisions_hold_one_final_decision_per_fg(short_trace: Path) -> None:
+    """A carried FG must not leave an intermediate postponement behind:
+    every FG the AP saw has exactly one final decision, and the summary
+    counts each FG once."""
+    engine = SimulationEngine(_exp4_config(short_trace))
+    result = engine.run()
+    ids = [d.fg_id for d in engine.last_decisions]
+    assert len(ids) == len(set(ids))
+    assert result["total_frame_groups"] == len(ids)
+    assert result["postponed_frame_groups"] == sum(
+        d.is_postponed for d in engine.last_decisions
+    )
 
 
 def test_last_decisions_measure_delay_from_true_origin(short_trace: Path) -> None:

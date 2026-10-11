@@ -360,15 +360,8 @@ class _RunStats:
     zigbee_packets_attempted: int = 0
     max_fg_delay_ms: float = 0.0
 
-    def record_cycle(
-        self, outcome: CycleOutcome, decisions: list[SchedulingDecision]
-    ) -> None:
-        """Fold one completed AP cycle into the running totals.
-
-        ``decisions`` are the cycle's decisions with delays measured from
-        each FG's true original start, so FGs carried over from earlier
-        cycles report their full delay.
-        """
+    def record_cycle(self, outcome: CycleOutcome) -> None:
+        """Fold one completed AP cycle into the cycle-level totals."""
         self.cycles_run += 1
         if outcome.used_fallback:
             self.fallback_cycles += 1
@@ -376,11 +369,17 @@ class _RunStats:
             self.wbeacon_delivered += 1
         else:
             self.wbeacon_lost += 1
-        for decision in decisions:
-            self.total_frame_groups += 1
-            if decision.is_postponed:
-                self.postponed_frame_groups += 1
-            self.max_fg_delay_ms = max(self.max_fg_delay_ms, decision.delay_ms)
+
+    def record_decision(self, decision: SchedulingDecision) -> None:
+        """Fold one FG's final decision into the FG-level totals.
+
+        Each FG is recorded once: when it is transmitted, dropped, or still
+        postponed at the end of the run.
+        """
+        self.total_frame_groups += 1
+        if decision.is_postponed:
+            self.postponed_frame_groups += 1
+        self.max_fg_delay_ms = max(self.max_fg_delay_ms, decision.delay_ms)
 
     def finalize(self, medium: ChannelMedium, horizon_ms: float) -> dict[str, float]:
         """Combine the accumulated totals with ``medium``'s final
@@ -428,11 +427,15 @@ class SimulationEngine:
         """Store ``config``; ``run()`` does all the actual work."""
         self.config = config
         self.last_medium: ChannelMedium | None = None
-        # Every WiFi scheduling decision of the last run, in cycle order, with
-        # delays from each FG's true original start (for MetricsCalculator).
+        # One final WiFi scheduling decision per FG of the last run, with
+        # delays from each FG's true original start (for MetricsCalculator):
+        # its transmission, its drop, or its postponement if the run ended
+        # while it was still waiting.
         self.last_decisions: list[SchedulingDecision] = []
         self.last_frame_groups: dict[int, FrameGroup] = {}
         self._wifi_fg_id_by_trans_id: dict[str, int] = {}
+        # Postponed FGs still waiting for a later cycle, by fg_id.
+        self._waiting: dict[int, SchedulingDecision] = {}
 
     def run(self) -> dict[str, float]:
         """Execute the discrete-event simulation scenario.
@@ -478,6 +481,7 @@ class SimulationEngine:
         self._wifi_fg_id_by_trans_id = {}
         self.last_decisions = []
         self.last_frame_groups = fg_by_id
+        self._waiting = {}
 
         env = simpy.Environment()
         env.process(
@@ -486,6 +490,10 @@ class SimulationEngine:
             )
         )
         env.run(until=horizon_ms)
+        # FGs still waiting when the run ends keep their last postponement.
+        for decision in self._waiting.values():
+            self._finalize(decision, stats)
+        self._waiting = {}
 
         self.last_medium = medium
         return stats.finalize(medium, horizon_ms)
@@ -506,6 +514,11 @@ class SimulationEngine:
             for record in self.last_medium.successful_transmissions()
             if record.trans_id in self._wifi_fg_id_by_trans_id
         }
+
+    def _finalize(self, decision: SchedulingDecision, stats: _RunStats) -> None:
+        """Record an FG's one final decision."""
+        self.last_decisions.append(decision)
+        stats.record_decision(decision)
 
     def _drive_cycles(
         self,
@@ -557,14 +570,16 @@ class SimulationEngine:
             # meet its deadline; otherwise reschedule it from there.
             inputs: list[FrameGroup] = []
             for fg in carried:
+                del self._waiting[fg.fg_id]
                 if busy_until + fg.duration_ms > fg.deadline_ms:
-                    self.last_decisions.append(
+                    self._finalize(
                         SchedulingDecision(
                             fg_id=fg.fg_id,
                             scheduled_start_ms=busy_until,
                             is_postponed=True,
                             delay_ms=busy_until - fg.original_start_ms,
-                        )
+                        ),
+                        stats,
                     )
                 else:
                     inputs.append(
@@ -592,31 +607,32 @@ class SimulationEngine:
             if ctc.delay_ms > 0:
                 yield env.timeout(ctc.last_attempts * ctc.delay_ms)
 
+            stats.record_cycle(outcome)
             carried = []
-            cycle_decisions: list[SchedulingDecision] = []
             for decision in outcome.schedule.decisions:
                 fg = fg_by_id[decision.fg_id]
                 start = decision.scheduled_start_ms
-                cycle_decisions.append(
-                    SchedulingDecision(
-                        fg_id=fg.fg_id,
-                        scheduled_start_ms=start,
-                        is_postponed=decision.is_postponed,
-                        delay_ms=max(0.0, start - fg.original_start_ms),
-                    )
+                final = SchedulingDecision(
+                    fg_id=fg.fg_id,
+                    scheduled_start_ms=start,
+                    is_postponed=decision.is_postponed,
+                    delay_ms=max(0.0, start - fg.original_start_ms),
                 )
                 if decision.is_postponed:
-                    # Not transmitted now. Keep it only while it can still
-                    # meet its deadline; otherwise this decision is its drop.
+                    # Not transmitted now. While it can still meet its
+                    # deadline it waits for the next cycle and gets no final
+                    # decision yet; otherwise this postponement is its drop.
                     if start + fg.duration_ms <= fg.deadline_ms:
                         carried.append(fg)
+                        self._waiting[fg.fg_id] = final
+                    else:
+                        self._finalize(final, stats)
                     continue
                 trans_id = f"wifi-{cycle.index}-{decision.fg_id}"
                 self._wifi_fg_id_by_trans_id[trans_id] = decision.fg_id
                 medium.register_transmission(trans_id, "wifi", start, fg.duration_ms)
                 on_air.append((fg, start))
-            self.last_decisions.extend(cycle_decisions)
-            stats.record_cycle(outcome, cycle_decisions)
+                self._finalize(final, stats)
 
             if adaptive and outcome.wbeacon_delivered:
                 fragments = _residual_wifi_fragments(
