@@ -126,22 +126,17 @@ def test_simulation_engine_runs_all_baseline_schedulers(
     assert result["wifi_transmissions"] > 0
 
 
-def test_simulation_engine_rejects_unimplemented_hard_constraint_scheduler(
-    short_trace: Path,
-) -> None:
-    """Exp 5's 'milp_hard_constraint' scheduler has no implementation yet;
-    the engine must fail clearly rather than silently mis-scheduling."""
-    config = SimulationConfig(
-        scenario_name="Test_Exp5",
-        duration_s=3.0,
-        wifi_trace_path=short_trace,
-        d_free_ms=62.0,
-        d_sensing_ms=0.0,
-        zigbee_period_ms=1000.0,
-        wifi_scheduling="milp_hard_constraint",
+def test_simulation_engine_runs_exp5_config(tmp_path: Path) -> None:
+    """configs/exp5_rigid_vacate.yaml (milp_hard_constraint) runs, and no
+    WiFi FG scheduled on air overlaps a ZigBee packet's announced window."""
+    config = SimulationConfig.from_yaml(
+        Path("configs/exp5_rigid_vacate.yaml"), trace_dir=tmp_path
     )
-    with pytest.raises(ConfigurationError):
-        SimulationEngine(config).run()
+    assert config.wifi_scheduling == "milp_hard_constraint"
+    result = SimulationEngine(replace(config, duration_s=3.0)).run()
+    assert result["cycles_run"] == 3.0
+    assert result["wifi_transmissions"] > 0
+    assert result["zigbee_packets_attempted"] > 0
 
 
 def test_simulation_engine_rejects_unknown_scheduler(short_trace: Path) -> None:

@@ -96,6 +96,11 @@ class MILPScheduler:
             ``pulp.HiGHS_CMD()`` or similar to use a different backend.
         time_limit_s: Wall-clock solver time limit, forwarded to the
             default CBC solver. Ignored if a custom ``solver`` is supplied.
+        hard_free_window: If true, no scheduled FG may overlap the free
+            window (``sum(z_free) == 0``) and an FG that cannot move clear
+            is vacated to the next cycle even if that misses its deadline.
+            This is the rigid "WiFi-Vacate" scheme of Exp 5. See
+            :class:`HardConstraintMILPScheduler`.
     """
 
     def __init__(
@@ -105,12 +110,14 @@ class MILPScheduler:
         mu_base: float = 100.0,
         solver: pulp.LpSolver | None = None,
         time_limit_s: float | None = 10.0,
+        hard_free_window: bool = False,
     ) -> None:
         self.gamma = gamma
         self.lambda_weight = lambda_weight
         self.mu_base = mu_base
         self.solver = solver
         self.time_limit_s = time_limit_s
+        self.hard_free_window = hard_free_window
 
     def schedule(
         self,
@@ -227,7 +234,11 @@ class MILPScheduler:
             # Causality / QoS / postponement feasibility (Eq. 14).
             prob += fg.arrival_time_ms <= s + big_m * p[fid]
             prob += s + d <= fg.deadline_ms + big_m * p[fid]
-            prob += t_end_ms + d <= fg.deadline_ms + big_m * (1 - p[fid])
+            if not self.hard_free_window:
+                # Soft mode postpones only FGs that can still meet their
+                # deadline next cycle. Hard mode must vacate the window at
+                # any cost, so a vacated FG may miss its deadline (a drop).
+                prob += t_end_ms + d <= fg.deadline_ms + big_m * (1 - p[fid])
             prob += s + d <= t_end_ms + big_m * p[fid]
 
             # Overlap avoidance (Eq. 16/17 intent, corrected disjunctive
@@ -255,6 +266,10 @@ class MILPScheduler:
         # Combined with the disjunction above, z_sense forced to 0 means
         # every FG is genuinely, unconditionally clear of the sensing window.
         prob += pulp.lpSum(z_sense.values()) == 0
+        if self.hard_free_window:
+            # Exp 5 (rigid WiFi-Vacate): the free window is protected like
+            # the sensing window. Overlap is forbidden, not penalized.
+            prob += pulp.lpSum(z_free.values()) == 0
 
         # Inter-FG conflict avoidance (Eq. 15): only applies to FGs that are
         # both scheduled this cycle (postponed FGs are exempt via P_k, P_j).
@@ -395,4 +410,31 @@ class MILPScheduler:
             t_sense_end_ms=t_sense_end,
             solver_status=status,
             solve_time_ms=(time.perf_counter() - began) * 1000.0,
+        )
+
+
+class HardConstraintMILPScheduler(MILPScheduler):
+    """Rigid MILP scheduler for Exp 5 ("WiFi-Vacate", Section 5.1).
+
+    WiFi FGs never overlap the free window. An FG that cannot move clear of
+    the window is vacated to the next cycle, even if it then misses its
+    deadline. The soft :class:`MILPScheduler` only penalizes such overlap.
+    """
+
+    def __init__(
+        self,
+        gamma: float = 10.0,
+        lambda_weight: float = 1.0,
+        mu_base: float = 100.0,
+        solver: pulp.LpSolver | None = None,
+        time_limit_s: float | None = 10.0,
+    ) -> None:
+        """Create a :class:`MILPScheduler` with ``hard_free_window=True``."""
+        super().__init__(
+            gamma=gamma,
+            lambda_weight=lambda_weight,
+            mu_base=mu_base,
+            solver=solver,
+            time_limit_s=time_limit_s,
+            hard_free_window=True,
         )

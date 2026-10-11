@@ -57,7 +57,11 @@ from cowic.wifi.baselines import (
     schedule_opportunistic,
     schedule_uncoordinated,
 )
-from cowic.wifi.milp_scheduler import MILPScheduler, ScheduleResult
+from cowic.wifi.milp_scheduler import (
+    HardConstraintMILPScheduler,
+    MILPScheduler,
+    ScheduleResult,
+)
 from cowic.zigbee.coordinator import ZigBeeCoordinator
 from cowic.zigbee.lwsa_adapter import LWSAAdapter
 from traces.playback import iter_cycles, load_trace
@@ -97,8 +101,8 @@ class SimulationConfig:
     the exact string values used in ``configs/exp*.yaml`` (see
     :meth:`from_yaml`). ``gamma_sensing_weight``/``lambda_delay_weight``/
     ``mu_base_cost`` override :class:`~cowic.wifi.milp_scheduler.MILPScheduler`'s
-    defaults when ``wifi_scheduling == "milp_soft_constraint"`` and are
-    ignored otherwise.
+    defaults for both MILP modes (``"milp_soft_constraint"`` and
+    ``"milp_hard_constraint"``) and are ignored otherwise.
     """
 
     scenario_name: str
@@ -218,20 +222,19 @@ def _build_scheduler(config: SimulationConfig) -> tuple[Scheduler, frozenset[str
         return _BaselineScheduler(config.wifi_scheduling), frozenset(
             {_BASELINE_STATUS[config.wifi_scheduling]}
         )
-    if config.wifi_scheduling == "milp_soft_constraint":
-        kwargs: dict[str, float] = {}
-        if config.gamma_sensing_weight is not None:
-            kwargs["gamma"] = config.gamma_sensing_weight
-        if config.lambda_delay_weight is not None:
-            kwargs["lambda_weight"] = config.lambda_delay_weight
-        if config.mu_base_cost is not None:
-            kwargs["mu_base"] = config.mu_base_cost
-        return MILPScheduler(**kwargs), frozenset({"Optimal"})
-    if config.wifi_scheduling == "milp_hard_constraint":
-        raise ConfigurationError(
-            "wifi_scheduling='milp_hard_constraint' (Exp 5) has no scheduler "
-            "implementation yet; tracked separately from Issue #7"
+    if config.wifi_scheduling in ("milp_soft_constraint", "milp_hard_constraint"):
+        milp = (
+            HardConstraintMILPScheduler()
+            if config.wifi_scheduling == "milp_hard_constraint"
+            else MILPScheduler()
         )
+        if config.gamma_sensing_weight is not None:
+            milp.gamma = config.gamma_sensing_weight
+        if config.lambda_delay_weight is not None:
+            milp.lambda_weight = config.lambda_delay_weight
+        if config.mu_base_cost is not None:
+            milp.mu_base = config.mu_base_cost
+        return milp, frozenset({"Optimal"})
     raise ConfigurationError(f"Unknown wifi_scheduling {config.wifi_scheduling!r}")
 
 
