@@ -1,8 +1,10 @@
 """Unit tests for the MILP scheduler (Eq. 11-17)."""
 
+import pytest
+
 from cowic.exceptions import ConfigurationError
 from cowic.models.frame_group import FrameGroup
-from cowic.wifi.milp_scheduler import MILPScheduler
+from cowic.wifi.milp_scheduler import HardConstraintMILPScheduler, MILPScheduler
 
 
 def _fg(
@@ -255,3 +257,59 @@ def test_schedule_non_optimal_clamps_delay_for_future_fg() -> None:
     by_id = {d.fg_id: d for d in result.decisions}
     assert by_id[2].is_postponed is True
     assert by_id[2].delay_ms == 0.0
+
+
+def _free_window_overlap(fgs: list[FrameGroup], result: object) -> float:
+    """Total airtime of scheduled (not postponed) FGs inside the free window."""
+    by_id = {fg.fg_id: fg for fg in fgs}
+    overlap = 0.0
+    for d in result.decisions:  # type: ignore[attr-defined]
+        if d.is_postponed:
+            continue
+        end = d.scheduled_start_ms + by_id[d.fg_id].duration_ms
+        lo = max(d.scheduled_start_ms, result.t_free_start_ms)  # type: ignore[attr-defined]
+        hi = min(end, result.t_free_end_ms)  # type: ignore[attr-defined]
+        overlap += max(0.0, hi - lo)
+    return overlap
+
+
+def test_hard_scheduler_is_milp_with_hard_flag() -> None:
+    scheduler = HardConstraintMILPScheduler(gamma=5.0)
+    assert isinstance(scheduler, MILPScheduler)
+    assert scheduler.hard_free_window is True
+    assert scheduler.gamma == 5.0
+    assert MILPScheduler().hard_free_window is False
+
+
+def test_hard_mode_vacates_fg_that_soft_mode_lets_overlap() -> None:
+    """A 90 ms window in a 100 ms cycle cannot avoid a 20 ms FG with a tight
+    deadline. Soft mode accepts the overlap; hard mode vacates the FG."""
+    fgs = [_fg(1, start=0.0, duration=20.0, deadline=25.0)]
+    soft = MILPScheduler().schedule(fgs, 90.0, 0.0, 0.0, 100.0)
+    hard = HardConstraintMILPScheduler().schedule(fgs, 90.0, 0.0, 0.0, 100.0)
+
+    assert soft.solver_status == "Optimal"
+    assert _free_window_overlap(fgs, soft) > 0.0
+    assert hard.solver_status == "Optimal"
+    assert _free_window_overlap(fgs, hard) == 0.0
+    (decision,) = hard.decisions
+    assert decision.is_postponed
+    assert decision.scheduled_start_ms == 100.0
+
+
+def test_hard_mode_moves_rather_than_vacates_when_possible() -> None:
+    fgs = [_fg(1, start=10.0, duration=10.0, deadline=500.0)]
+    result = HardConstraintMILPScheduler().schedule(fgs, 40.0, 0.0, 0.0, 200.0)
+    assert result.solver_status == "Optimal"
+    assert not result.decisions[0].is_postponed
+    assert _free_window_overlap(fgs, result) == 0.0
+
+
+def test_hard_mode_never_overlaps_free_window_under_load() -> None:
+    fgs = [
+        _fg(i, start=i * 12.0, duration=10.0, deadline=i * 12.0 + 10.0 + bound)
+        for i, bound in enumerate([5.0, 50.0, 5.0, 100.0, 5.0, 50.0, 5.0, 100.0])
+    ]
+    result = HardConstraintMILPScheduler().schedule(fgs, 62.0, 10.0, 0.0, 120.0)
+    assert result.solver_status == "Optimal"
+    assert _free_window_overlap(fgs, result) == pytest.approx(0.0, abs=1e-3)
