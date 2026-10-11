@@ -174,19 +174,24 @@ Over discrete parameters:
 
 ## 7. Contributor Workstreams & Milestones
 
-### 7.1 Suggested Team Assignments
-* **Upayan Mazumder (`upayanmazumder` - Lead):**
-  - Architecture coordination & simulation engine (`src/cowic/sim/`).
-  - MILP scheduling optimization engine (`src/cowic/wifi/milp_scheduler.py`).
-  - Experiment orchestration & statistical analysis (`src/cowic/analysis/`).
-* **Nitesh Pandey (`Nitesh050`):**
-  - Trace generation & playback system (`traces/synthetic_generator.py`).
-  - WiFi AP orchestrator & state machine (`src/cowic/wifi/ap_orchestrator.py`).
-  - Baseline implementations (Exp 1, Exp 2, Exp 3).
-* **Divyansh Saxena (`DIVYANSHSAXENA23`):**
-  - ZigBee superframe logic & L-WSA solver (`src/cowic/zigbee/lwsa_adapter.py`).
-  - CTC signaling channel model (`src/cowic/ctc/channel.py`).
-  - Verification test suite & metric benchmarking (`tests/`).
+### 7.1 Team Assignments and Presentation Ownership
+
+Presentation ownership matches Review 2:
+
+* **Upayan Mazumder (`upayanmazumder`) — Central architecture / Lead:**
+  - Simulation engine and channel medium (`src/cowic/sim/`).
+  - MILP scheduling engine (`src/cowic/wifi/milp_scheduler.py`).
+  - L-WSA and ZigBee coordinator (`src/cowic/zigbee/`).
+  - Figure plotter and integration (`src/cowic/analysis/plotter.py`).
+* **Nitesh Pandey (`Nitesh050`) — WiFi side:**
+  - Trace generation and playback (`traces/`).
+  - AP orchestrator, baselines, and fallback (`src/cowic/wifi/`).
+  - CTC channel and metrics (`src/cowic/ctc/channel.py`, `src/cowic/analysis/metrics.py`).
+  - Benchmark sweep runner (`scripts/run_benchmark_sweep.py`).
+* **Divyansh Saxena (`DIVYANSHSAXENA23`) — ZigBee side:**
+  - ZigBee architecture and L-WSA specification review.
+  - Superframe design input.
+  - Test-suite design and verification planning.
 
 ### 7.2 Milestone Roadmap
 * **Milestone 1 (Foundation & Trace Engine):** Establish trace generator matching Table 5 statistical distributions and basic SimPy collision medium.

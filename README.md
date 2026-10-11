@@ -4,7 +4,17 @@ Software-only simulation and evaluation of the **CoWiC-MAC** protocol (Cheng et 
 
 ## Overview
 
-This project investigates wireless coexistence between IEEE 802.11 (WiFi) and IEEE 802.15.4 (ZigBee) on the shared 2.4 GHz ISM band. The WiFi Access Point (AP) reschedules WiFi Frame Groups (FGs) via Mixed-Integer Linear Programming (MILP). The ZigBee Coordinator (ZC) dynamically adapts its superframe structure via the Lightweight Window-Scaling Algorithm (L-WSA). Coordination occurs over Cross-Technology Communication (CTC).
+This project studies wireless coexistence between IEEE 802.11 (WiFi) and IEEE 802.15.4 (ZigBee) on the shared 2.4 GHz ISM band. The WiFi Access Point (AP) reschedules WiFi Frame Groups (FGs) using Mixed-Integer Linear Programming (MILP). The ZigBee Coordinator (ZC) adapts its superframe structure using the Lightweight Window-Scaling Algorithm (L-WSA). The two networks communicate over a Cross-Technology Communication (CTC) link.
+
+## Team
+
+| Name | Registration Number | GitHub |
+|---|---|---|
+| Upayan Mazumder | 24BDS0367 | `upayanmazumder` |
+| Nitesh Pandey | 24BCB0141 | `Nitesh050` |
+| Divyansh Saxena | 24BCB0108 | `DIVYANSHSAXENA23` |
+
+See `CONTRIBUTORS.md` for the full contributor breakdown.
 
 ## Repository Structure
 
@@ -12,10 +22,11 @@ This project investigates wireless coexistence between IEEE 802.11 (WiFi) and IE
 cowicmac-case-study/
 ├── pyproject.toml              # Build system, dependencies, tool configuration
 ├── README.md                   # Project overview and quickstart guide
+├── CONTRIBUTORS.md             # Contributor roles and module ownership
 ├── IMPLEMENTATION_PLAN.md      # Detailed system specification and formulas
-├── SPRINT_PLAN.md              # 2-day implementation sprint plan (Oct 10-11)
 ├── configs/                    # Experiment configuration presets (Exp 1 to Exp 6)
 ├── traces/                     # Trace generators and data storage
+├── scripts/                    # Benchmark sweep runner
 ├── src/cowic/                  # Core protocol and simulation package
 │   ├── models/                 # Dataclass models (FrameGroup, SuperframeConfig)
 │   ├── wifi/                   # AP orchestrator and MILP scheduler
@@ -31,7 +42,7 @@ cowicmac-case-study/
 
 ### Installation
 
-Install dependencies using Python 3.11+:
+Install dependencies using Python 3.11 or newer:
 
 ```bash
 python3 -m venv .venv
@@ -41,7 +52,7 @@ pip install -e ".[dev]"
 
 ### Running Tests
 
-Run the test suite with pytest:
+Run the full test suite:
 
 ```bash
 pytest
@@ -54,6 +65,40 @@ ruff check .
 mypy src/ tests/
 ```
 
-## Sprint Plan
+### Running Experiments
 
-See `SPRINT_PLAN.md` for the two-day development breakdown across October 10 and October 11, 2026.
+Generate a synthetic traffic trace:
+
+```bash
+python -m traces.synthetic_generator --profile Traffic_I --output traces/data/traffic1.parquet
+```
+
+Run a specific experiment:
+
+```bash
+python -m cowic.sim.simulation_engine --config configs/exp4_cowic_full.yaml
+```
+
+Run the benchmark sweep (quick smoke run):
+
+```bash
+python scripts/run_benchmark_sweep.py --quick
+```
+
+Run the full benchmark sweep:
+
+```bash
+python scripts/run_benchmark_sweep.py --output-csv results/benchmark_results.csv
+```
+
+### Evaluation Results
+
+After running the benchmark sweep, generate figures:
+
+```bash
+python -m cowic.analysis.plotter --results-dir results/ --output-dir figures/
+```
+
+## Base Paper
+
+Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." *Computer Networks*, Vol. 287, Art. 112479, Sept. 2026. DOI: [10.1016/j.comnet.2026.112479](https://doi.org/10.1016/j.comnet.2026.112479)
