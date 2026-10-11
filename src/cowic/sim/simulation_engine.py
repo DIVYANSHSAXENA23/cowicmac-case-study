@@ -38,8 +38,9 @@ nominal cycle boundaries would require a larger redesign, out of scope
 here.
 """
 
+import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import simpy
@@ -47,7 +48,7 @@ import yaml
 
 from cowic.ctc.channel import CTCChannel, CTCMessage
 from cowic.exceptions import ConfigurationError
-from cowic.models.frame_group import FrameGroup
+from cowic.models.frame_group import FrameGroup, SchedulingDecision
 from cowic.models.superframe import SuperframeConfig, ZigBeePacket
 from cowic.sim.channel_medium import ChannelMedium
 from cowic.wifi.ap_orchestrator import APOrchestrator, CycleOutcome, Scheduler
@@ -75,11 +76,10 @@ TRACE_DATA_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent / "traces" / "data"
 )
 
-# Default pending ZigBee packet queue depth reported each cycle. No issue
-# in this sprint covers per-packet ZigBee traffic generation (only WiFi FG
-# traces exist); the ZC's demand is modeled as a constant queue depth
-# rather than left unmodeled.
-DEFAULT_ZIGBEE_PENDING_PACKETS = 5
+# No issue in this sprint covers per-packet ZigBee traffic generation, so
+# the ZC reports a constant queue each cycle. By default the queue is sized
+# so the ZBeacon demand equals the experiment's D_free (see
+# _pending_packets); set SimulationConfig.zigbee_pending_packets to override.
 
 # A legacy, coexistence-unaware ZigBee superframe (`zigbee_adaptation:
 # "fixed"`, Exp 1/2/3/5): a maximal standard CAP+CFP structure, oblivious
@@ -114,7 +114,7 @@ class SimulationConfig:
     ctc_per: float = 0.0
     ctc_delay_ms: float = 0.1
     ctc_max_retries: int = 2
-    zigbee_pending_packets: int = DEFAULT_ZIGBEE_PENDING_PACKETS
+    zigbee_pending_packets: int | None = None
     gamma_sensing_weight: float | None = None
     lambda_delay_weight: float | None = None
     mu_base_cost: float | None = None
@@ -246,6 +246,8 @@ def _residual_wifi_fragments(
     the window is actually clear (Section 4.4)."""
     fragments = []
     for decision in schedule.decisions:
+        if decision.is_postponed:
+            continue  # Not on air this cycle.
         fg = fg_by_id[decision.fg_id]
         start_ms = max(decision.scheduled_start_ms, window_start_ms)
         end_ms = min(decision.scheduled_start_ms + fg.duration_ms, window_end_ms)
@@ -283,6 +285,22 @@ def _fixed_anchor_ms(
     if notified and schedule.t_free_end_ms > schedule.t_free_start_ms:
         return schedule.t_free_start_ms
     return cycle_start_ms
+
+
+def _pending_packets(config: SimulationConfig, packet_duration_ms: float) -> int:
+    """Queue depth the ZC reports each cycle.
+
+    Unless overridden, the queue holds enough packets for the ZBeacon demand
+    to cover the experiment's ``d_free_ms``. A fixed queue would make the
+    D_free sweep (31-123 ms) a no-op for the bidirectional experiments.
+    """
+    if config.zigbee_pending_packets is not None:
+        return config.zigbee_pending_packets
+    if packet_duration_ms <= 0:
+        raise ConfigurationError(
+            f"packet duration must be positive, got {packet_duration_ms}"
+        )
+    return math.ceil(config.d_free_ms / packet_duration_ms)
 
 
 def _synthesize_zigbee_packets(
@@ -343,7 +361,7 @@ class _RunStats:
     max_fg_delay_ms: float = 0.0
 
     def record_cycle(self, outcome: CycleOutcome) -> None:
-        """Fold one completed AP cycle's outcome into the running totals."""
+        """Fold one completed AP cycle into the cycle-level totals."""
         self.cycles_run += 1
         if outcome.used_fallback:
             self.fallback_cycles += 1
@@ -351,11 +369,17 @@ class _RunStats:
             self.wbeacon_delivered += 1
         else:
             self.wbeacon_lost += 1
-        for decision in outcome.schedule.decisions:
-            self.total_frame_groups += 1
-            if decision.is_postponed:
-                self.postponed_frame_groups += 1
-            self.max_fg_delay_ms = max(self.max_fg_delay_ms, decision.delay_ms)
+
+    def record_decision(self, decision: SchedulingDecision) -> None:
+        """Fold one FG's final decision into the FG-level totals.
+
+        Each FG is recorded once: when it is transmitted, dropped, or still
+        postponed at the end of the run.
+        """
+        self.total_frame_groups += 1
+        if decision.is_postponed:
+            self.postponed_frame_groups += 1
+        self.max_fg_delay_ms = max(self.max_fg_delay_ms, decision.delay_ms)
 
     def finalize(self, medium: ChannelMedium, horizon_ms: float) -> dict[str, float]:
         """Combine the accumulated totals with ``medium``'s final
@@ -403,7 +427,15 @@ class SimulationEngine:
         """Store ``config``; ``run()`` does all the actual work."""
         self.config = config
         self.last_medium: ChannelMedium | None = None
+        # One final WiFi scheduling decision per FG of the last run, with
+        # delays from each FG's true original start (for MetricsCalculator):
+        # its transmission, its drop, or its postponement if the run ended
+        # while it was still waiting.
+        self.last_decisions: list[SchedulingDecision] = []
+        self.last_frame_groups: dict[int, FrameGroup] = {}
         self._wifi_fg_id_by_trans_id: dict[str, int] = {}
+        # Postponed FGs still waiting for a later cycle, by fg_id.
+        self._waiting: dict[int, SchedulingDecision] = {}
 
     def run(self) -> dict[str, float]:
         """Execute the discrete-event simulation scenario.
@@ -447,6 +479,9 @@ class SimulationEngine:
         zc = ZigBeeCoordinator(lwsa=lwsa)
         stats = _RunStats()
         self._wifi_fg_id_by_trans_id = {}
+        self.last_decisions = []
+        self.last_frame_groups = fg_by_id
+        self._waiting = {}
 
         env = simpy.Environment()
         env.process(
@@ -455,6 +490,10 @@ class SimulationEngine:
             )
         )
         env.run(until=horizon_ms)
+        # FGs still waiting when the run ends keep their last postponement.
+        for decision in self._waiting.values():
+            self._finalize(decision, stats)
+        self._waiting = {}
 
         self.last_medium = medium
         return stats.finalize(medium, horizon_ms)
@@ -476,6 +515,11 @@ class SimulationEngine:
             if record.trans_id in self._wifi_fg_id_by_trans_id
         }
 
+    def _finalize(self, decision: SchedulingDecision, stats: _RunStats) -> None:
+        """Record an FG's one final decision."""
+        self.last_decisions.append(decision)
+        stats.record_decision(decision)
+
     def _drive_cycles(
         self,
         env: simpy.Environment,
@@ -493,42 +537,102 @@ class SimulationEngine:
         horizon_ms = config.duration_s * 1000.0
         bidirectional = config.ctc_direction == "bidirectional"
         adaptive = config.zigbee_adaptation == "lwsa"
+        pending_packets = _pending_packets(config, zc.lwsa.desired_packet_duration_ms)
+        # FGs postponed by the previous cycle: they were not transmitted and
+        # join the next cycle's scheduling input.
+        carried: list[FrameGroup] = []
+        # WiFi transmissions actually registered so far that may still be on
+        # air at a later cycle start, as (FG, start_ms).
+        on_air: list[tuple[FrameGroup, float]] = []
 
         for cycle in iter_cycles(frame_groups, config.zigbee_period_ms, horizon_ms):
             if env.now < cycle.start_ms:
                 yield env.timeout(cycle.start_ms - env.now)
 
+            # Airtime still busy at the cycle start comes from what was really
+            # transmitted, not from the trace's original timing: a postponed
+            # FG is not on air, and a deferred FG may now cross the boundary.
+            on_air = [
+                (fg, start)
+                for fg, start in on_air
+                if start + fg.duration_ms > cycle.start_ms
+            ]
+            carryover = [
+                replace(fg, arrival_time_ms=start, original_start_ms=start)
+                for fg, start in on_air
+            ]
+            busy_until = max(
+                (start + fg.duration_ms for fg, start in on_air),
+                default=cycle.start_ms,
+            )
+
+            # A carried FG is ready at busy_until. Drop it if it can no longer
+            # meet its deadline; otherwise reschedule it from there.
+            inputs: list[FrameGroup] = []
+            for fg in carried:
+                del self._waiting[fg.fg_id]
+                if busy_until + fg.duration_ms > fg.deadline_ms:
+                    self._finalize(
+                        SchedulingDecision(
+                            fg_id=fg.fg_id,
+                            scheduled_start_ms=busy_until,
+                            is_postponed=True,
+                            delay_ms=busy_until - fg.original_start_ms,
+                        ),
+                        stats,
+                    )
+                else:
+                    inputs.append(
+                        replace(
+                            fg, arrival_time_ms=busy_until, original_start_ms=busy_until
+                        )
+                    )
+            inputs.extend(cycle.frame_groups)
+
             zbeacon: CTCMessage | None = None
             if bidirectional:
-                raw_zbeacon = zc.build_zbeacon(
-                    config.zigbee_pending_packets, cycle.start_ms
-                )
+                raw_zbeacon = zc.build_zbeacon(pending_packets, cycle.start_ms)
                 if ctc.transmit(raw_zbeacon):
                     zbeacon = raw_zbeacon
                 if ctc.delay_ms > 0:
                     yield env.timeout(ctc.last_attempts * ctc.delay_ms)
 
             outcome = ap.process_cycle(
-                cycle.frame_groups,
+                inputs,
                 cycle.start_ms,
                 cycle.end_ms,
                 zbeacon,
-                cycle.active_carryover,
+                carryover,
             )
             if ctc.delay_ms > 0:
                 yield env.timeout(ctc.last_attempts * ctc.delay_ms)
-            stats.record_cycle(outcome)
 
+            stats.record_cycle(outcome)
+            carried = []
             for decision in outcome.schedule.decisions:
                 fg = fg_by_id[decision.fg_id]
+                start = decision.scheduled_start_ms
+                final = SchedulingDecision(
+                    fg_id=fg.fg_id,
+                    scheduled_start_ms=start,
+                    is_postponed=decision.is_postponed,
+                    delay_ms=max(0.0, start - fg.original_start_ms),
+                )
+                if decision.is_postponed:
+                    # Not transmitted now. While it can still meet its
+                    # deadline it waits for the next cycle and gets no final
+                    # decision yet; otherwise this postponement is its drop.
+                    if start + fg.duration_ms <= fg.deadline_ms:
+                        carried.append(fg)
+                        self._waiting[fg.fg_id] = final
+                    else:
+                        self._finalize(final, stats)
+                    continue
                 trans_id = f"wifi-{cycle.index}-{decision.fg_id}"
                 self._wifi_fg_id_by_trans_id[trans_id] = decision.fg_id
-                medium.register_transmission(
-                    trans_id,
-                    "wifi",
-                    decision.scheduled_start_ms,
-                    fg.duration_ms,
-                )
+                medium.register_transmission(trans_id, "wifi", start, fg.duration_ms)
+                on_air.append((fg, start))
+                self._finalize(final, stats)
 
             if adaptive and outcome.wbeacon_delivered:
                 fragments = _residual_wifi_fragments(
