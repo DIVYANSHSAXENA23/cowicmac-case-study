@@ -2,11 +2,11 @@
 
 ## Team
 
-| Name | Registration Number | GitHub |
-|---|---|---|
-| Upayan Mazumder | 24BDS0367 | `upayanmazumder` |
-| Nitesh Pandey | 24BCB0141 | `Nitesh050` |
-| Divyansh Saxena | 24BCB0108 | `DIVYANSHSAXENA23` |
+| Name            | Registration Number | GitHub             |
+| --------------- | ------------------- | ------------------ |
+| Upayan Mazumder | 24BDS0367           | `upayanmazumder`   |
+| Nitesh Pandey   | 24BCB0141           | `Nitesh050`        |
+| Divyansh Saxena | 24BCB0108           | `DIVYANSHSAXENA23` |
 
 ---
 
@@ -14,11 +14,11 @@
 
 This distribution matches Review 2.
 
-| Presenter | Domain | Focus |
-|---|---|---|
+| Presenter       | Domain               | Focus                                                                  |
+| --------------- | -------------------- | ---------------------------------------------------------------------- |
 | Upayan Mazumder | Central architecture | System model, CTC link, SimPy engine, shared channel medium, data flow |
-| Nitesh Pandey | WiFi side | Frame Groups, MILP scheduler, AP orchestrator, baseline Exp 1–3 |
-| Divyansh Saxena | ZigBee side | IEEE 802.15.4 superframe, L-WSA, ZigBee Coordinator |
+| Nitesh Pandey   | WiFi side            | Frame Groups, MILP scheduler, AP orchestrator, baseline Exp 1–3        |
+| Divyansh Saxena | ZigBee side          | IEEE 802.15.4 superframe, L-WSA, ZigBee Coordinator                    |
 
 ---
 

@@ -89,10 +89,10 @@ Cycle steps in words:
 
 Module: `src/cowic/ctc/channel.py`
 
-| Message | Direction | Payload |
-|---|---|---|
-| ZBeacon | ZC → AP | `d_free_ms` |
-| WBeacon | AP → ZC | `t_free_start_ms`, `t_free_end_ms`, `t_sense_start_ms`, `t_sense_end_ms` |
+| Message | Direction | Payload                                                                  |
+| ------- | --------- | ------------------------------------------------------------------------ |
+| ZBeacon | ZC → AP   | `d_free_ms`                                                              |
+| WBeacon | AP → ZC   | `t_free_start_ms`, `t_free_end_ms`, `t_sense_start_ms`, `t_sense_end_ms` |
 
 Notes:
 
@@ -136,13 +136,13 @@ Collision rule in this project: temporal overlap on the shared channel causes mu
 
 Module: `src/cowic/analysis/metrics.py`
 
-| Metric | Meaning |
-|---|---|
-| $G_z$ | ZigBee gain = delivered / clean-spectrum capacity |
-| $PDR_w$ | WiFi drop rate = discarded FG duration / requested duration |
-| $U_{\text{eff}}$ | Successful useful airtime / cycle length |
-| Jitter | Spread of WiFi FG delays |
-| Max delay | Worst WiFi FG delay |
+| Metric           | Meaning                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| $G_z$            | ZigBee gain = delivered / clean-spectrum capacity           |
+| $PDR_w$          | WiFi drop rate = discarded FG duration / requested duration |
+| $U_{\text{eff}}$ | Successful useful airtime / cycle length                    |
+| Jitter           | Spread of WiFi FG delays                                    |
+| Max delay        | Worst WiFi FG delay                                         |
 
 Acceptance point used in the benchmark runner: Exp 4, $D_{\text{free}}=31$ ms, $T_{ZB}=1000$ ms → require $G_z > 0.9$ and $PDR_w = 0$.
 

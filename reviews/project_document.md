@@ -3,7 +3,7 @@
 **Project:** CoWiC-MAC Case Study  
 **Document:** `reviews/project_document.md`  
 **Authors:** Upayan Mazumder (24BDS0367), Nitesh Pandey (24BCB0141), Divyansh Saxena (24BCB0108)  
-**Base paper:** Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." *Computer Networks*, Vol. 287, Art. 112479, Sept. 2026. DOI: [10.1016/j.comnet.2026.112479](https://doi.org/10.1016/j.comnet.2026.112479)
+**Base paper:** Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." _Computer Networks_, Vol. 287, Art. 112479, Sept. 2026. DOI: [10.1016/j.comnet.2026.112479](https://doi.org/10.1016/j.comnet.2026.112479)
 
 ---
 
@@ -83,20 +83,25 @@ A Frame Group (FG) is a batch of WiFi frames that the AP schedules as one unit. 
 
 Main fields:
 
-| Field | Meaning |
-|---|---|
-| `fg_id` | Unique identifier |
-| `arrival_time_ms` | Earliest time the FG may start |
-| `duration_ms` | Airtime duration |
-| `deadline_ms` | Latest finish time |
-| `original_start_ms` | Start time before rescheduling |
-| `qos_sensitive` | Flag for delay-sensitive traffic |
+| Field               | Meaning                          |
+| ------------------- | -------------------------------- |
+| `fg_id`             | Unique identifier                |
+| `arrival_time_ms`   | Earliest time the FG may start   |
+| `duration_ms`       | Airtime duration                 |
+| `deadline_ms`       | Latest finish time               |
+| `original_start_ms` | Start time before rescheduling   |
+| `qos_sensitive`     | Flag for delay-sensitive traffic |
 
 ### 3.2 MILP Scheduler (Equations 11-17)
 
 The AP solves this programme each cycle:
 
-$$\min \sum_{k=1}^{K} z_k^{\text{free}} d_k + \gamma \sum_{k=1}^{K} z_k^{\text{sense}} d_k + \lambda \sum_{k=1}^{K} y_k + \sum_{k=1}^{K} \mu_k P_k$$
+```math
+\min \sum_{k=1}^{K} z_k^{\text{free}} d_k
++ \gamma \sum_{k=1}^{K} z_k^{\text{sense}} d_k
++ \lambda \sum_{k=1}^{K} y_k
++ \sum_{k=1}^{K} \mu_k P_k
+```
 
 Decision variables:
 
@@ -132,21 +137,21 @@ stateDiagram-v2
 
 States:
 
-| State | Action |
-|---|---|
-| `MAINTAINING` | Idle between cycles |
+| State           | Action                |
+| --------------- | --------------------- |
+| `MAINTAINING`   | Idle between cycles   |
 | `CTC_GATHERING` | Collect ZigBee demand |
-| `RESCHEDULING` | Run MILP or fallback |
-| `CTC_NOTIFYING` | Send WBeacon |
-| `TRANSMITTING` | Drive WiFi airtime |
+| `RESCHEDULING`  | Run MILP or fallback  |
+| `CTC_NOTIFYING` | Send WBeacon          |
+| `TRANSMITTING`  | Drive WiFi airtime    |
 
 ### 3.4 Baseline Experiments (Exp 1-3)
 
-| Exp | Name | Behaviour |
-|---|---|---|
-| Exp 1 | Uncoordinated | Standard CSMA/CA. No CTC. No rescheduling. |
+| Exp   | Name          | Behaviour                                          |
+| ----- | ------------- | -------------------------------------------------- |
+| Exp 1 | Uncoordinated | Standard CSMA/CA. No CTC. No rescheduling.         |
 | Exp 2 | Opportunistic | AP senses natural idle gaps. No WiFi rescheduling. |
-| Exp 3 | ECC | NAV-based reservation. Fixed ZigBee superframe. |
+| Exp 3 | ECC           | NAV-based reservation. Fixed ZigBee superframe.    |
 
 ---
 
@@ -168,28 +173,32 @@ Hard limits from the standard and the base paper:
 
 IEEE 802.15.4 2.4 GHz O-QPSK PHY constants used in this project:
 
-| Constant | Value |
-|---|---|
-| Symbol duration | 0.016 ms |
-| Base slot duration | 0.96 ms (60 symbols) |
-| Backoff slot | 0.32 ms (20 symbols) |
-| Turnaround time | 0.192 ms (12 symbols) |
-| ACK duration | 0.352 ms (22 symbols) |
+| Constant            | Value                  |
+| ------------------- | ---------------------- |
+| Symbol duration     | 0.016 ms               |
+| Base slot duration  | 0.96 ms (60 symbols)   |
+| Backoff slot        | 0.32 ms (20 symbols)   |
+| Turnaround time     | 0.192 ms (12 symbols)  |
+| ACK duration        | 0.352 ms (22 symbols)  |
 | Max packet duration | 4.064 ms (254 symbols) |
 
 ### 4.2 L-WSA Algorithm (Algorithm 2)
 
 The ZC maximises:
 
-$$\eta_{\text{total}} = m \cdot t_{\min} \cdot \eta_{\text{cap}}^{p} + \alpha \cdot n \cdot t_{\text{SfSlot}} \cdot \eta_{\text{cfp}}^{p}$$
+```math
+\eta_{\text{total}}
+= m \cdot t_{\min} \cdot \eta_{\text{cap}}^{p}
++ \alpha \cdot n \cdot t_{\text{SfSlot}} \cdot \eta_{\text{cfp}}^{p}
+```
 
 Search variables:
 
-| Variable | Domain |
-|---|---|
-| $t_{\text{SfSlot}}$ | `BASE_SLOT * 2^SO`, $SO \in [0, 8]$ |
-| $j$ (CFP slots) | $[0, 7]$ |
-| $i$ (CAP slots) | $i + j \le 15$ |
+| Variable            | Domain                                                                |
+| ------------------- | --------------------------------------------------------------------- |
+| $t_{\text{SfSlot}}$ | `BASE_SLOT * 2^SO`, $SO \in [0, 8]$                                   |
+| $j$ (CFP slots)     | $[0, 7]$                                                              |
+| $i$ (CAP slots)     | $i + j \le 15$                                                        |
 | $t_{\text{offset}}$ | Window start, or end of each residual WiFi fragment inside the window |
 
 Filter: $(1 + i + j) \cdot t_{\text{SfSlot}} \le$ free-window duration. Each candidate slot must avoid residual WiFi fragments $\mathcal{T}^{\text{WiFi}}$.
@@ -213,10 +222,10 @@ stateDiagram-v2
 
 CTC lets WiFi and ZigBee exchange control messages without a shared MAC.
 
-| Message | Direction | Payload keys |
-|---|---|---|
-| ZBeacon | ZC → AP | `d_free_ms` |
-| WBeacon | AP → ZC | `t_free_start_ms`, `t_free_end_ms`, `t_sense_start_ms`, `t_sense_end_ms` |
+| Message | Direction | Payload keys                                                             |
+| ------- | --------- | ------------------------------------------------------------------------ |
+| ZBeacon | ZC → AP   | `d_free_ms`                                                              |
+| WBeacon | AP → ZC   | `t_free_start_ms`, `t_free_end_ms`, `t_sense_start_ms`, `t_sense_end_ms` |
 
 Physical-layer CTC primitives in the base paper:
 
@@ -242,24 +251,24 @@ The medium stores:
 
 ## 7. Experiments
 
-| Exp | Config | What it tests | Fixed parts |
-|---|---|---|---|
-| Exp 1 | `exp1_uncoordinated.yaml` | Uncoordinated baseline | No CTC, no MILP, no L-WSA |
-| Exp 2 | `exp2_opportunistic.yaml` | Natural whitespace only | No WiFi rescheduling |
-| Exp 3 | `exp3_ecc.yaml` | NAV-style ECC | Fixed ZigBee superframe |
-| Exp 4 | `exp4_cowic_full.yaml` | Full CoWiC-MAC | Soft MILP + L-WSA + sensing window |
-| Exp 5 | `exp5_rigid_vacate.yaml` | Hard-constraint vacate | Fixed ZigBee superframe |
+| Exp   | Config                    | What it tests                  | Fixed parts                          |
+| ----- | ------------------------- | ------------------------------ | ------------------------------------ |
+| Exp 1 | `exp1_uncoordinated.yaml` | Uncoordinated baseline         | No CTC, no MILP, no L-WSA            |
+| Exp 2 | `exp2_opportunistic.yaml` | Natural whitespace only        | No WiFi rescheduling                 |
+| Exp 3 | `exp3_ecc.yaml`           | NAV-style ECC                  | Fixed ZigBee superframe              |
+| Exp 4 | `exp4_cowic_full.yaml`    | Full CoWiC-MAC                 | Soft MILP + L-WSA + sensing window   |
+| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard-constraint vacate         | Fixed ZigBee superframe              |
 | Exp 6 | `exp6_overhead_free.yaml` | CoWiC without sensing overhead | Soft MILP + L-WSA, no sensing window |
 
 ### Parameter sweep
 
-| Parameter | Values |
-|---|---|
-| $D_{\text{free}}$ | 31, 62, 93, 123 ms |
-| $T_{ZB}$ | 1000, 2000, 5000 ms |
-| Traffic profiles | Traffic I–IV |
-| $D_{\text{sensing}}$ | 10, 20, 50, 100 ms |
-| Seeds | 5 per point |
+| Parameter            | Values              |
+| -------------------- | ------------------- |
+| $D_{\text{free}}$    | 31, 62, 93, 123 ms  |
+| $T_{ZB}$             | 1000, 2000, 5000 ms |
+| Traffic profiles     | Traffic I–IV        |
+| $D_{\text{sensing}}$ | 10, 20, 50, 100 ms  |
+| Seeds                | 5 per point         |
 
 **Acceptance criterion (Issue #11):** Exp 4 at $D_{\text{free}} = 31$ ms and $T_{ZB} = 1000$ ms must achieve $G_z > 0.9$ and $PDR_w = 0$.
 
@@ -267,13 +276,13 @@ The medium stores:
 
 ## 8. Key Metrics
 
-| Metric | Definition |
-|---|---|
-| $G_z$ | ZigBee delivered payload / theoretical clean-spectrum capacity |
-| $PDR_w$ | Discarded WiFi FG duration / total requested WiFi duration |
-| $U_{\text{eff}}$ | Successful WiFi + ZigBee + control airtime / cycle length |
-| Jitter | Variation of WiFi FG delay |
-| Max delay | Largest WiFi FG delay in the run |
+| Metric           | Definition                                                     |
+| ---------------- | -------------------------------------------------------------- |
+| $G_z$            | ZigBee delivered payload / theoretical clean-spectrum capacity |
+| $PDR_w$          | Discarded WiFi FG duration / total requested WiFi duration     |
+| $U_{\text{eff}}$ | Successful WiFi + ZigBee + control airtime / cycle length      |
+| Jitter           | Variation of WiFi FG delay                                     |
+| Max delay        | Largest WiFi FG delay in the run                               |
 
 ### Hypotheses under test
 
@@ -285,49 +294,49 @@ The medium stores:
 
 ## 9. Software Stack
 
-| Layer | Choice |
-|---|---|
-| Language | Python 3.11+ |
-| DES engine | SimPy |
-| MILP | PuLP + HiGHS (`pulp < 3.0.0`) |
-| Data | NumPy, Pandas, PyYAML |
-| Plots | Matplotlib |
-| Tests | pytest (245 tests) |
-| Lint / types | ruff, mypy |
+| Layer        | Choice                        |
+| ------------ | ----------------------------- |
+| Language     | Python 3.11+                  |
+| DES engine   | SimPy                         |
+| MILP         | PuLP + HiGHS (`pulp < 3.0.0`) |
+| Data         | NumPy, Pandas, PyYAML         |
+| Plots        | Matplotlib                    |
+| Tests        | pytest (245 tests)            |
+| Lint / types | ruff, mypy                    |
 
 ---
 
 ## 10. Presentation Ownership
 
-| Presenter | Domain |
-|---|---|
+| Presenter       | Domain               |
+| --------------- | -------------------- |
 | Upayan Mazumder | Central architecture |
-| Nitesh Pandey | WiFi side |
-| Divyansh Saxena | ZigBee side |
+| Nitesh Pandey   | WiFi side            |
+| Divyansh Saxena | ZigBee side          |
 
 ---
 
 ## 11. References
 
-1. Bianchi, G. "Performance Analysis of the IEEE 802.11 Distributed Coordination Function." *IEEE JSAC*, 18(3), 2000.
-2. Jamieson, K., and Balakrishnan, H. "PPR: Partial Packet Recovery for Wireless Networks." *ACM SIGCOMM CCR*, 37(4), 2007.
-3. Huang, J., Xing, G., Zhou, G., and Zhou, R. "Beyond Co-existence: Exploiting WiFi White Space for ZigBee Performance Assurance." *ICNP*, 2010.
-4. Liang, C.-J. M., Priyantha, N. B., Liu, J., and Terzis, A. "Surviving Wi-Fi Interference in Low Power ZigBee Networks." *SenSys*, 2010.
-5. Zhang, X., and Shin, K. G. "Enabling Coexistence of Heterogeneous Wireless Systems: Case for ZigBee and WiFi." *MobiHoc*, 2011.
-6. Wang, Y., et al. "WiCop: Engineering WiFi Temporal White-Spaces for Safe Operations of Wireless Personal Area Networks in Medical Applications." *IEEE TMC*, 13(5), 2014.
-7. Guo, P., Cao, J., Zhang, K., and Liu, X. "Enhancing ZigBee Throughput under WiFi Interference Using Real-Time Adaptive Coding." *INFOCOM*, 2014.
-8. Yang, P., et al. "Taming Cross-Technology Interference for Wi-Fi and ZigBee Coexistence Networks." *IEEE TMC*, 15(4), 2016.
-9. Bellalta, B. "IEEE 802.11ax: High-Efficiency WLANs." *IEEE Wireless Commun.*, 23(1), 2016.
-10. Li, Z., and He, T. "WEBee: Physical-Layer Cross-Technology Communication via Emulation." *MobiCom*, 2017.
-11. Deng, D.-J., et al. "IEEE 802.11ax: Highly Efficient WLANs for Intelligent Information Infrastructure." *IEEE Commun. Mag.*, 55(12), 2017.
-12. Yin, Z., Li, Z., Kim, S. M., and He, T. "Explicit Channel Coordination via Cross-Technology Communication." *MobiSys*, 2018.
-13. Khorov, E., Kiryanov, A., Lyakhov, A., and Bianchi, G. "A Tutorial on IEEE 802.11ax High Efficiency WLANs." *IEEE Commun. Surveys & Tutorials*, 21(1), 2019.
-14. Nurchis, M., and Bellalta, B. "Target Wake Time: Scheduled Access in IEEE 802.11ax WLANs." *IEEE Wireless Commun.*, 26(2), 2019.
-15. Pan, Y., Li, S., Zhang, Y., and Zhu, T. "CDA: Coordinating Data Dissemination and Aggregation in Heterogeneous IoT Networks Using CTC." *JNCA*, 171, 2020.
-16. Shao, C., et al. "PolarScout: Wi-Fi Interference-Resilient ZigBee Communication via Shell-Shaping." *IEEE/ACM ToN*, 28(4), 2020.
-17. Kim, S. "Enabling WLAN and WPAN Coexistence via Cross-Technology Communication." *Sensors*, 22(3), 2022.
-18. Chen, W., Yin, Z., and He, T. "Enabling Global Cooperation for Heterogeneous Networks via Reliable Concurrent Cross Technology Communications." *IEEE TMC*, 21(11), 2022.
-19. Cheng, T., Li, S., Jiao, F., and Pan, Y. "WibZig: Reliable and Commodity-Device Compatible PHY-CTC via Chip Emulation in Phase." *IPSN*, 2023.
-20. Cheng, T., Li, S., Dang, W., and Pan, Y. "An Effective Data Dissemination Method in WAIC Networks Using Enhanced CTC." *Computer Networks*, 269, 2025.
+1. Bianchi, G. "Performance Analysis of the IEEE 802.11 Distributed Coordination Function." _IEEE JSAC_, 18(3), 2000.
+2. Jamieson, K., and Balakrishnan, H. "PPR: Partial Packet Recovery for Wireless Networks." _ACM SIGCOMM CCR_, 37(4), 2007.
+3. Huang, J., Xing, G., Zhou, G., and Zhou, R. "Beyond Co-existence: Exploiting WiFi White Space for ZigBee Performance Assurance." _ICNP_, 2010.
+4. Liang, C.-J. M., Priyantha, N. B., Liu, J., and Terzis, A. "Surviving Wi-Fi Interference in Low Power ZigBee Networks." _SenSys_, 2010.
+5. Zhang, X., and Shin, K. G. "Enabling Coexistence of Heterogeneous Wireless Systems: Case for ZigBee and WiFi." _MobiHoc_, 2011.
+6. Wang, Y., et al. "WiCop: Engineering WiFi Temporal White-Spaces for Safe Operations of Wireless Personal Area Networks in Medical Applications." _IEEE TMC_, 13(5), 2014.
+7. Guo, P., Cao, J., Zhang, K., and Liu, X. "Enhancing ZigBee Throughput under WiFi Interference Using Real-Time Adaptive Coding." _INFOCOM_, 2014.
+8. Yang, P., et al. "Taming Cross-Technology Interference for Wi-Fi and ZigBee Coexistence Networks." _IEEE TMC_, 15(4), 2016.
+9. Bellalta, B. "IEEE 802.11ax: High-Efficiency WLANs." _IEEE Wireless Commun._, 23(1), 2016.
+10. Li, Z., and He, T. "WEBee: Physical-Layer Cross-Technology Communication via Emulation." _MobiCom_, 2017.
+11. Deng, D.-J., et al. "IEEE 802.11ax: Highly Efficient WLANs for Intelligent Information Infrastructure." _IEEE Commun. Mag._, 55(12), 2017.
+12. Yin, Z., Li, Z., Kim, S. M., and He, T. "Explicit Channel Coordination via Cross-Technology Communication." _MobiSys_, 2018.
+13. Khorov, E., Kiryanov, A., Lyakhov, A., and Bianchi, G. "A Tutorial on IEEE 802.11ax High Efficiency WLANs." _IEEE Commun. Surveys & Tutorials_, 21(1), 2019.
+14. Nurchis, M., and Bellalta, B. "Target Wake Time: Scheduled Access in IEEE 802.11ax WLANs." _IEEE Wireless Commun._, 26(2), 2019.
+15. Pan, Y., Li, S., Zhang, Y., and Zhu, T. "CDA: Coordinating Data Dissemination and Aggregation in Heterogeneous IoT Networks Using CTC." _JNCA_, 171, 2020.
+16. Shao, C., et al. "PolarScout: Wi-Fi Interference-Resilient ZigBee Communication via Shell-Shaping." _IEEE/ACM ToN_, 28(4), 2020.
+17. Kim, S. "Enabling WLAN and WPAN Coexistence via Cross-Technology Communication." _Sensors_, 22(3), 2022.
+18. Chen, W., Yin, Z., and He, T. "Enabling Global Cooperation for Heterogeneous Networks via Reliable Concurrent Cross Technology Communications." _IEEE TMC_, 21(11), 2022.
+19. Cheng, T., Li, S., Jiao, F., and Pan, Y. "WibZig: Reliable and Commodity-Device Compatible PHY-CTC via Chip Emulation in Phase." _IPSN_, 2023.
+20. Cheng, T., Li, S., Dang, W., and Pan, Y. "An Effective Data Dissemination Method in WAIC Networks Using Enhanced CTC." _Computer Networks_, 269, 2025.
 
-**Base paper:** Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." *Computer Networks*, 287, Art. 112479, 2026.
+**Base paper:** Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." _Computer Networks_, 287, Art. 112479, 2026.
