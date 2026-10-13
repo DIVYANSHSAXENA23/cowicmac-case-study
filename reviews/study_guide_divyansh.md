@@ -194,7 +194,7 @@ A. A fixed ZigBee layout wastes fragmented whitespace. L-WSA reshapes slot size 
 **Q2. Why is $j$ capped at 7?**  
 A. That limit comes from the IEEE 802.15.4 / CoWiC-MAC formulation used in this project. CAP + CFP also cannot exceed 15 active data slots beyond the beacon accounting used here.
 
-**Q3. What is $t\_{\min}$?**  
+**Q3. What is** $t_{\min}$?  
 A. The minimum time needed for a CAP packet exchange, including backoff and ACK overhead.
 
 **Q4. What if the free window is too short?**  
