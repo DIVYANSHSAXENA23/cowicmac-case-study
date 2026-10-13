@@ -61,26 +61,26 @@ Operational meaning:
 
 PHY constants (2.4 GHz O-QPSK):
 
-| Constant | Value |
-|---|---|
+| Constant        | Value    |
+| --------------- | -------- |
 | Symbol duration | 0.016 ms |
-| Base slot | 0.96 ms |
-| Backoff slot | 0.32 ms |
-| Turnaround | 0.192 ms |
-| ACK | 0.352 ms |
-| Max packet | 4.064 ms |
+| Base slot       | 0.96 ms  |
+| Backoff slot    | 0.32 ms  |
+| Turnaround      | 0.192 ms |
+| ACK             | 0.352 ms |
+| Max packet      | 4.064 ms |
 
 ### 4.2 SuperframeConfig model
 
 Module: `src/cowic/models/superframe.py`
 
-| Field | Meaning |
-|---|---|
-| `slot_duration_ms` | $t_{\text{SfSlot}}$ |
-| `cap_slots` | $i$ |
-| `cfp_slots` | $j$ |
-| `beacon_offset_ms` | Start offset of the beacon inside the free window |
-| `beacon_interval_ms` | Superframe period / beacon interval |
+| Field                | Meaning                                           |
+| -------------------- | ------------------------------------------------- |
+| `slot_duration_ms`   | $t_{\text{SfSlot}}$                               |
+| `cap_slots`          | $i$                                               |
+| `cfp_slots`          | $j$                                               |
+| `beacon_offset_ms`   | Start offset of the beacon inside the free window |
+| `beacon_interval_ms` | Superframe period / beacon interval               |
 
 ### 4.3 L-WSA search algorithm
 
@@ -88,7 +88,11 @@ Module: `src/cowic/zigbee/lwsa_adapter.py`
 
 Objective:
 
-$$\eta_{\text{total}} = m \cdot t_{\min} \cdot \eta_{\text{cap}}^{p} + \alpha \cdot n \cdot t_{\text{SfSlot}} \cdot \eta_{\text{cfp}}^{p}$$
+```math
+\eta_{\text{total}}
+= m \cdot t_{\min} \cdot \eta_{\text{cap}}^{p}
++ \alpha \cdot n \cdot t_{\text{SfSlot}} \cdot \eta_{\text{cfp}}^{p}
+```
 
 Where:
 
@@ -99,12 +103,12 @@ Where:
 
 Search domains:
 
-| Variable | Domain |
-|---|---|
-| Superframe order $SO$ | $[0, 8]$, $t_{\text{SfSlot}} = 0.96 \cdot 2^{SO}$ ms |
-| CFP slots $j$ | $[0, 7]$ |
-| CAP slots $i$ | all $i$ with $i + j \le 15$ |
-| Beacon offset | free-window start, plus ends of residual WiFi fragments that start inside the window |
+| Variable              | Domain                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| Superframe order $SO$ | $[0, 8]$, $t_{\text{SfSlot}} = 0.96 \cdot 2^{SO}$ ms                                 |
+| CFP slots $j$         | $[0, 7]$                                                                             |
+| CAP slots $i$         | all $i$ with $i + j \le 15$                                                          |
+| Beacon offset         | free-window start, plus ends of residual WiFi fragments that start inside the window |
 
 ```mermaid
 flowchart TD
@@ -141,13 +145,13 @@ stateDiagram-v2
 
 State meanings:
 
-| State | Action |
-|---|---|
-| `IDLE` | Waiting for demand report or WBeacon |
-| `CTC_REPORTING` | Emit ZBeacon with `d_free_ms` |
-| `COMMAND_ACQUISITION` | Parse WBeacon window fields |
-| `TRAFFIC_ADJUSTMENT` | Call L-WSA with residual WiFi fragments |
-| `SUPERFRAME_ACTIVE` | Use the chosen `SuperframeConfig` |
+| State                 | Action                                  |
+| --------------------- | --------------------------------------- |
+| `IDLE`                | Waiting for demand report or WBeacon    |
+| `CTC_REPORTING`       | Emit ZBeacon with `d_free_ms`           |
+| `COMMAND_ACQUISITION` | Parse WBeacon window fields             |
+| `TRAFFIC_ADJUSTMENT`  | Call L-WSA with residual WiFi fragments |
+| `SUPERFRAME_ACTIVE`   | Use the chosen `SuperframeConfig`       |
 
 ### 4.5 ZBeacon demand reporting
 
@@ -190,7 +194,7 @@ A. A fixed ZigBee layout wastes fragmented whitespace. L-WSA reshapes slot size 
 **Q2. Why is $j$ capped at 7?**  
 A. That limit comes from the IEEE 802.15.4 / CoWiC-MAC formulation used in this project. CAP + CFP also cannot exceed 15 active data slots beyond the beacon accounting used here.
 
-**Q3. What is $t_{\min}$?**  
+**Q3. What is $t\_{\min}$?**  
 A. The minimum time needed for a CAP packet exchange, including backoff and ACK overhead.
 
 **Q4. What if the free window is too short?**  

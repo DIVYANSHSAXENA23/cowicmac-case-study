@@ -51,14 +51,14 @@ A Frame Group is the AP scheduling unit. It matches the 802.11ax idea of batchin
 
 Important fields:
 
-| Field | Role |
-|---|---|
-| `fg_id` | Identity |
-| `arrival_time_ms` | Causality lower bound |
-| `duration_ms` | Airtime $d_k$ |
-| `deadline_ms` | Latest finish $e_k$ |
+| Field               | Role                       |
+| ------------------- | -------------------------- |
+| `fg_id`             | Identity                   |
+| `arrival_time_ms`   | Causality lower bound      |
+| `duration_ms`       | Airtime $d_k$              |
+| `deadline_ms`       | Latest finish $e_k$        |
 | `original_start_ms` | Pre-reschedule start $s_k$ |
-| `qos_sensitive` | Delay priority hint |
+| `qos_sensitive`     | Delay priority hint        |
 
 ### 4.2 MILP scheduler
 
@@ -66,7 +66,12 @@ Module: `src/cowic/wifi/milp_scheduler.py`
 
 Objective:
 
-$$\min \sum_k z_k^{\text{free}} d_k + \gamma \sum_k z_k^{\text{sense}} d_k + \lambda \sum_k y_k + \sum_k \mu_k P_k$$
+```math
+\min \sum_k z_k^{\text{free}} d_k
++ \gamma \sum_k z_k^{\text{sense}} d_k
++ \lambda \sum_k y_k
++ \sum_k \mu_k P_k
+```
 
 Interpretation:
 
@@ -105,13 +110,13 @@ stateDiagram-v2
 
 What each state does:
 
-| State | Work |
-|---|---|
-| `MAINTAINING` | Ready for next cycle |
-| `CTC_GATHERING` | Read ZBeacon demand |
-| `RESCHEDULING` | Call MILP or fallback |
-| `CTC_NOTIFYING` | Build and send WBeacon |
-| `TRANSMITTING` | Apply the chosen FG schedule |
+| State           | Work                         |
+| --------------- | ---------------------------- |
+| `MAINTAINING`   | Ready for next cycle         |
+| `CTC_GATHERING` | Read ZBeacon demand          |
+| `RESCHEDULING`  | Call MILP or fallback        |
+| `CTC_NOTIFYING` | Build and send WBeacon       |
+| `TRANSMITTING`  | Apply the chosen FG schedule |
 
 On error, the orchestrator restores `MAINTAINING` before it re-raises.
 
@@ -135,10 +140,10 @@ This is a lightweight heuristic. It does not claim optimality.
 
 Module: `src/cowic/wifi/baselines.py`
 
-| Exp | Scheduler intent |
-|---|---|
-| Exp 1 | Static / uncoordinated. Keep original FG times. |
-| Exp 2 | Opportunistic. Notify ZigBee about natural gaps. Do not move WiFi. |
+| Exp   | Scheduler intent                                                      |
+| ----- | --------------------------------------------------------------------- |
+| Exp 1 | Static / uncoordinated. Keep original FG times.                       |
+| Exp 2 | Opportunistic. Notify ZigBee about natural gaps. Do not move WiFi.    |
 | Exp 3 | ECC. Reserve with NAV-style protection. Keep ZigBee superframe fixed. |
 
 These baselines exist so Exp 4 gains are measured against real alternatives, not against an empty strawman.

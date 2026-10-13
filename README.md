@@ -1,6 +1,6 @@
 # CoWiC-MAC Case Study
 
-Software-only simulation and evaluation of the **CoWiC-MAC** protocol (Cheng et al., *Computer Networks* 2026).
+Software-only simulation and evaluation of the **CoWiC-MAC** protocol (Cheng et al., _Computer Networks_ 2026).
 
 ## Overview
 
@@ -8,17 +8,17 @@ This project studies wireless coexistence between IEEE 802.11 (WiFi) and IEEE 80
 
 ## Team
 
-| Name | Registration Number | GitHub |
-|---|---|---|
-| Upayan Mazumder | 24BDS0367 | `upayanmazumder` |
-| Nitesh Pandey | 24BCB0141 | `Nitesh050` |
-| Divyansh Saxena | 24BCB0108 | `DIVYANSHSAXENA23` |
+| Name            | Registration Number | GitHub             |
+| --------------- | ------------------- | ------------------ |
+| Upayan Mazumder | 24BDS0367           | `upayanmazumder`   |
+| Nitesh Pandey   | 24BCB0141           | `Nitesh050`        |
+| Divyansh Saxena | 24BCB0108           | `DIVYANSHSAXENA23` |
 
-See `CONTRIBUTORS.md` for the full contributor breakdown.
+See [Contributors](CONTRIBUTORS.md) for module and presentation ownership.
 
 ## Repository Structure
 
-```
+```text
 cowicmac-case-study/
 ├── pyproject.toml              # Build system, dependencies, tool configuration
 ├── README.md                   # Project overview and quickstart guide
@@ -37,6 +37,8 @@ cowicmac-case-study/
 ├── tests/                      # Automated unit and integration test suite
 └── reviews/                    # Course review documents and base paper PDF
 ```
+
+Read the [project document](reviews/project_document.md) and the [presentation guides](reviews/README.md).
 
 ## Quickstart
 
@@ -101,4 +103,4 @@ python -m cowic.analysis.plotter --results-dir results/ --output-dir figures/
 
 ## Base Paper
 
-Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." *Computer Networks*, Vol. 287, Art. 112479, Sept. 2026. DOI: [10.1016/j.comnet.2026.112479](https://doi.org/10.1016/j.comnet.2026.112479)
+Cheng, T., Li, S., and Pan, Y. "CoWiC-MAC: A Coordinated WiFi-Centric MAC Mechanism in Heterogeneous Wireless Networks." _Computer Networks_, Vol. 287, Art. 112479, Sept. 2026. DOI: [10.1016/j.comnet.2026.112479](https://doi.org/10.1016/j.comnet.2026.112479)
