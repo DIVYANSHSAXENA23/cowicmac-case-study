@@ -71,8 +71,7 @@ sequenceDiagram
   LWSA-->>ZC: SuperframeConfig
   AP->>CH: transmit WiFi FGs
   ZC->>CH: transmit ZigBee slots
-  CH-->>AP: collisions / successes
-  CH-->>ZC: collisions / successes
+  Note over CH: Records are read by the metrics module after the run
 ```
 
 Cycle steps in words:
@@ -140,7 +139,7 @@ Module: `src/cowic/analysis/metrics.py`
 | ---------------- | ----------------------------------------------------------- |
 | $G_z$            | ZigBee gain = delivered / clean-spectrum capacity           |
 | $PDR_w$          | WiFi drop rate = discarded FG duration / requested duration |
-| $U_{\text{eff}}$ | Successful useful airtime / cycle length                    |
+| $U_{\text{eff}}$ | Successful useful airtime / simulated duration              |
 | Jitter           | Spread of WiFi FG delays                                    |
 | Max delay        | Worst WiFi FG delay                                         |
 

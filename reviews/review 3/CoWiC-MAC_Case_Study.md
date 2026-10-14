@@ -24,7 +24,7 @@ Stack:
 | --------------------- | ----------------------------- |
 | Language              | Python 3.11+                  |
 | Discrete-event engine | SimPy                         |
-| MILP                  | PuLP + HiGHS (`pulp < 3.0.0`) |
+| MILP                  | PuLP + CBC (`pulp < 3.0.0`)   |
 | Tests                 | pytest                        |
 | Lint / types          | ruff, mypy                    |
 
@@ -55,8 +55,8 @@ Presentation ownership matches Review 2.
 
 | Contributor     | Presentation domain  | Main implementation focus                                                            |
 | --------------- | -------------------- | ------------------------------------------------------------------------------------ |
-| Upayan Mazumder | Central architecture | Simulation engine, channel medium, MILP scheduler, L-WSA, plotter, integration       |
-| Nitesh Pandey   | WiFi side            | Trace generator, AP orchestrator, baselines, fallback, CTC, metrics, benchmark sweep |
+| Upayan Mazumder | Central architecture | Simulation engine, CTC, channel medium, MILP scheduler, L-WSA, plotter, integration |
+| Nitesh Pandey   | WiFi side            | Trace generator, AP orchestrator, baselines, fallback, hard-constraint MILP (Exp 5), engine fixes, metrics, benchmark sweep |
 | Divyansh Saxena | ZigBee side          | ZigBee architecture review, superframe / L-WSA specification input, test design      |
 
 ---
@@ -84,8 +84,7 @@ sequenceDiagram
   LWSA-->>ZC: SuperframeConfig
   AP->>MED: WiFi transmissions
   ZC->>MED: ZigBee transmissions
-  MED-->>AP: overlap / success records
-  MED-->>ZC: overlap / success records
+  Note over MED: Records are read by the metrics module after the run
 ```
 
 CTC payloads:
@@ -120,7 +119,7 @@ Constraint groups:
 6. Overlap indicator constraints for free and sensing windows
 7. Hard sensing-window protection: $\sum_k z_k^{\text{sense}} = 0$
 
-Solver path: PuLP model solved with HiGHS. If status is not optimal, the AP uses whitespace expansion fallback.
+Solver path: PuLP model solved with the CBC solver that PuLP includes. A HiGHS solver can be supplied as an option. If status is not optimal, the AP uses whitespace expansion fallback.
 
 Postponed FG reporting convention: a postponed FG is reported at `scheduled_start_ms = t_end_ms` with `delay_ms = max(0, t_end_ms - original_start_ms)`.
 
@@ -186,7 +185,7 @@ This abstraction is enough for MAC-layer coordination studies. It is not a PHY f
 | Exp 2 | `exp2_opportunistic.yaml` | Natural whitespace only   | No WiFi rescheduling                 |
 | Exp 3 | `exp3_ecc.yaml`           | NAV-style ECC             | Fixed ZigBee superframe              |
 | Exp 4 | `exp4_cowic_full.yaml`    | Full CoWiC-MAC            | Soft MILP + L-WSA + sensing window   |
-| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard WiFi vacate ablation | Fixed ZigBee superframe              |
+| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard WiFi vacate ablation | Hard MILP + fixed ZigBee superframe  |
 | Exp 6 | `exp6_overhead_free.yaml` | Sensing-overhead ablation | Soft MILP + L-WSA, no sensing window |
 
 Parameter sweep dimensions:
@@ -195,7 +194,7 @@ Parameter sweep dimensions:
 | -------------------- | ------------------- |
 | $D_{\text{free}}$    | 31, 62, 93, 123 ms  |
 | $T_{ZB}$             | 1000, 2000, 5000 ms |
-| Traffic              | Traffic I–IV        |
+| Traffic              | Traffic I and III by default; I–IV with `--traffic` |
 | $D_{\text{sensing}}$ | 10, 20, 50, 100 ms  |
 | Seeds                | 5                   |
 
@@ -211,7 +210,7 @@ Hypothesis mapping:
 | ---------- | ------------------------------------- | -------------------------------- |
 | H1         | $G_z \ge 90\%$ under heavy load       | Exp 4 with MILP + L-WSA          |
 | H2         | $PDR_w = 0$                           | Deadline-aware MILP postponement |
-| H3         | Bi-directional adaptation is required | Exp 5 / Exp 6 ablations          |
+| H3         | Bi-directional adaptation is required | Exp 5 (no L-WSA), Exp 6 (no sensing window) |
 
 Observed quick-sweep acceptance point (Exp 4, Traffic I, $D_{\text{free}}=31$ ms, $T_{ZB}=1000$ ms):
 

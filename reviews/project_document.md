@@ -28,7 +28,7 @@ This project builds a software-only simulation of that loop. It uses no radio ha
 The system has three domains: the WiFi domain, the ZigBee domain, and the shared 2.4 GHz medium.
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph WiFi["WiFi Domain"]
     AP[AP Orchestrator]
     MILP[MILP Scheduler]
@@ -60,8 +60,8 @@ flowchart LR
   WB --> ZC
   FG --> CH
   SF --> CH
-  CH -->|collisions / metrics| AP
-  CH -->|collisions / metrics| ZC
+  MET[Metrics Calculator]
+  CH -->|records after the run| MET
 ```
 
 ### End-to-end coordination cycle
@@ -71,7 +71,7 @@ flowchart LR
 3. The AP sends a WBeacon with window bounds.
 4. The ZC runs L-WSA and builds a superframe that fits the free window.
 5. Both sides transmit on the shared medium.
-6. The channel medium records overlaps, successes, and delays.
+6. The channel medium records each transmission and marks overlaps as collisions. The metrics module reads these records after the run.
 
 ---
 
@@ -121,7 +121,7 @@ Constraint groups:
 6. Overlap indicator bounds for $z_k^{\text{free}}$ and $z_k^{\text{sense}}$
 7. Sensing window protection: $\sum_{k=1}^{K} z_k^{\text{sense}} = 0$
 
-Solver: PuLP with the HiGHS backend. If the MILP has no feasible solution, the AP uses whitespace expansion fallback.
+Solver: PuLP with the CBC solver that PuLP includes. A HiGHS solver can be supplied as an option. If the MILP has no optimal solution, the AP uses whitespace expansion fallback.
 
 ### 3.3 AP Orchestrator State Machine
 
@@ -149,7 +149,7 @@ States:
 
 | Exp   | Name          | Behaviour                                          |
 | ----- | ------------- | -------------------------------------------------- |
-| Exp 1 | Uncoordinated | Standard CSMA/CA. No CTC. No rescheduling.         |
+| Exp 1 | Uncoordinated | No CTC. No rescheduling. ZigBee uses a fixed superframe at the cycle start. Carrier sensing is not modelled. |
 | Exp 2 | Opportunistic | AP senses natural idle gaps. No WiFi rescheduling. |
 | Exp 3 | ECC           | NAV-based reservation. Fixed ZigBee superframe.    |
 
@@ -213,7 +213,7 @@ stateDiagram-v2
   IDLE --> COMMAND_ACQUISITION: WBeacon received
   COMMAND_ACQUISITION --> TRAFFIC_ADJUSTMENT: window parsed
   TRAFFIC_ADJUSTMENT --> SUPERFRAME_ACTIVE: L-WSA done
-  SUPERFRAME_ACTIVE --> IDLE: superframe ends
+  SUPERFRAME_ACTIVE --> CTC_REPORTING: next demand report
 ```
 
 ---
@@ -240,12 +240,9 @@ This software model abstracts CTC as discrete-event messages with a configurable
 
 `ChannelMedium` records every WiFi and ZigBee transmission interval. A collision occurs when intervals overlap beyond `OVERLAP_TOLERANCE_MS`.
 
-The medium stores:
+The medium stores one record per transmission: protocol, start time, end time, and a success flag.
 
-- Successful airtime
-- Collided airtime
-- Delay and jitter samples
-- Dropped Frame Groups
+The metrics module computes airtime, delay, jitter, and drops after the run. It uses these records and the WiFi scheduling decisions of the engine.
 
 ---
 
@@ -257,7 +254,7 @@ The medium stores:
 | Exp 2 | `exp2_opportunistic.yaml` | Natural whitespace only        | No WiFi rescheduling                 |
 | Exp 3 | `exp3_ecc.yaml`           | NAV-style ECC                  | Fixed ZigBee superframe              |
 | Exp 4 | `exp4_cowic_full.yaml`    | Full CoWiC-MAC                 | Soft MILP + L-WSA + sensing window   |
-| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard-constraint vacate         | Fixed ZigBee superframe              |
+| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard-constraint vacate         | Hard MILP + fixed ZigBee superframe  |
 | Exp 6 | `exp6_overhead_free.yaml` | CoWiC without sensing overhead | Soft MILP + L-WSA, no sensing window |
 
 ### Parameter sweep
@@ -266,7 +263,7 @@ The medium stores:
 | -------------------- | ------------------- |
 | $D_{\text{free}}$    | 31, 62, 93, 123 ms  |
 | $T_{ZB}$             | 1000, 2000, 5000 ms |
-| Traffic profiles     | Traffic I–IV        |
+| Traffic profiles     | Traffic I and III by default; I–IV with `--traffic` |
 | $D_{\text{sensing}}$ | 10, 20, 50, 100 ms  |
 | Seeds                | 5 per point         |
 
@@ -280,7 +277,7 @@ The medium stores:
 | ---------------- | -------------------------------------------------------------- |
 | $G_z$            | ZigBee delivered payload / theoretical clean-spectrum capacity |
 | $PDR_w$          | Discarded WiFi FG duration / total requested WiFi duration     |
-| $U_{\text{eff}}$ | Successful WiFi + ZigBee + control airtime / cycle length      |
+| $U_{\text{eff}}$ | Successful WiFi + ZigBee + control airtime / simulated duration |
 | Jitter           | Variation of WiFi FG delay                                     |
 | Max delay        | Largest WiFi FG delay in the run                               |
 
@@ -288,7 +285,7 @@ The medium stores:
 
 1. Under heavy load, CoWiC-MAC achieves $G_z \ge 90\%$.
 2. CoWiC-MAC keeps $PDR_w = 0$ by deadline-aware postponement.
-3. Removing L-WSA (Exp 5 / Exp 6 variants) shows that bi-directional adaptation is required under fragmented whitespace.
+3. The ablations show which parts are necessary under fragmented whitespace. Exp 5 removes L-WSA (fixed superframe with hard WiFi vacate). Exp 6 removes the sensing window.
 
 ---
 
@@ -298,7 +295,7 @@ The medium stores:
 | ------------ | ----------------------------- |
 | Language     | Python 3.11+                  |
 | DES engine   | SimPy                         |
-| MILP         | PuLP + HiGHS (`pulp < 3.0.0`) |
+| MILP         | PuLP + CBC (`pulp < 3.0.0`)   |
 | Data         | NumPy, Pandas, PyYAML         |
 | Plots        | Matplotlib                    |
 | Tests        | pytest (245 tests)            |

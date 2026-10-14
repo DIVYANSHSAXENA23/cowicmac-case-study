@@ -90,7 +90,7 @@ Constraint groups:
 6. **Overlap indicators** — $z_k$ variables mark intersection with free / sensing windows
 7. **Sensing protection** — $\sum_k z_k^{\text{sense}} = 0$
 
-Solver path: PuLP model → HiGHS. Non-optimal / infeasible status maps to a no-solution result. The AP then calls fallback.
+Solver path: PuLP model → CBC (the solver that PuLP includes; HiGHS is optional). Non-optimal / infeasible status maps to a no-solution result. The AP then calls fallback.
 
 Postponed FG reporting convention used across the codebase: report `scheduled_start_ms = t_end_ms` and `delay_ms = max(0, t_end_ms - original_start_ms)`.
 
@@ -154,7 +154,7 @@ Modules: `traces/synthetic_generator.py`, `traces/playback.py`
 
 - Generates FG arrivals that follow Table 5 traffic profiles
 - Traffic I is high load. Traffic III is lighter. Traffic II and IV fill the full occupancy range.
-- Playback caches traces by profile and seed for reproducible sweeps.
+- Playback loads a trace and splits it into scheduling cycles. The sweep runner caches traces by profile, duration, and seed for reproducible sweeps.
 
 ### 4.7 MILP decision flow
 
@@ -186,8 +186,8 @@ A. The ZC needs a reliable uplink slot to report demand. Soft protection would l
 **Q4. When do you postpone an FG?**  
 A. When keeping it in the current cycle would violate deadlines or destroy the required windows. Postponement is preferred over a drop when the next cycle can still meet the deadline.
 
-**Q5. How do you keep $PDR_w = 0$?**  
-A. The model prefers delay and postponement costs over discarding airtime. Drops occur only when no feasible keep-or-postpone option remains.
+**Q5. How does the model avoid WiFi drops?**  
+A. The model prefers delay and postponement costs over discarding airtime. A drop occurs only when no feasible keep-or-postpone option remains. At the documented acceptance point (Exp 4, $D_{\text{free}}=31$ ms, $T_{ZB}=1000$ ms), $PDR_w = 0$.
 
 **Q6. What is the difference between Exp 2 and Exp 4?**  
 A. Exp 2 only uses natural gaps. Exp 4 actively reshapes WiFi airtime with MILP.
