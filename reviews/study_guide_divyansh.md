@@ -140,7 +140,7 @@ stateDiagram-v2
   IDLE --> COMMAND_ACQUISITION: process_wbeacon
   COMMAND_ACQUISITION --> TRAFFIC_ADJUSTMENT: parse grant
   TRAFFIC_ADJUSTMENT --> SUPERFRAME_ACTIVE: L-WSA result ready
-  SUPERFRAME_ACTIVE --> IDLE: activity ends
+  SUPERFRAME_ACTIVE --> CTC_REPORTING: next demand report
 ```
 
 State meanings:
