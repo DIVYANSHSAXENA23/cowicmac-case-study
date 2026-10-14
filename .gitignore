@@ -48,3 +48,6 @@ figures/
 traces/data/*.parquet
 traces/data/*.csv
 !traces/data/.gitkeep
+
+# Documentation build tools (scripts/build_docs.py)
+node_modules/
