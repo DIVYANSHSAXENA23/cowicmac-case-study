@@ -219,14 +219,16 @@ The metrics module computes airtime, delay, jitter, and drops after the run. It 
 
 ## 7. Experiments
 
-| Exp   | Config                    | What it tests                  | Fixed parts                          |
-| ----- | ------------------------- | ------------------------------ | ------------------------------------ |
-| Exp 1 | `exp1_uncoordinated.yaml` | Uncoordinated baseline         | No CTC, no MILP, no L-WSA            |
-| Exp 2 | `exp2_opportunistic.yaml` | Natural whitespace only        | No WiFi rescheduling                 |
-| Exp 3 | `exp3_ecc.yaml`           | NAV-style ECC                  | Fixed ZigBee superframe              |
-| Exp 4 | `exp4_cowic_full.yaml`    | Full CoWiC-MAC                 | Soft MILP + L-WSA + sensing window   |
-| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard-constraint vacate         | Hard MILP + fixed ZigBee superframe  |
-| Exp 6 | `exp6_overhead_free.yaml` | CoWiC without sensing overhead | Soft MILP + L-WSA, no sensing window |
+| Exp   | Config                    | What it tests           | Fixed parts                          |
+| ----- | ------------------------- | ----------------------- | ------------------------------------ |
+| Exp 1 | `exp1_uncoordinated.yaml` | Uncoordinated baseline  | No CTC, no MILP, no L-WSA            |
+| Exp 2 | `exp2_opportunistic.yaml` | Natural whitespace only | No WiFi rescheduling                 |
+| Exp 3 | `exp3_ecc.yaml`           | NAV-style ECC           | Fixed ZigBee superframe              |
+| Exp 4 | `exp4_cowic_full.yaml`    | Full CoWiC-MAC          | Soft MILP + L-WSA + sensing window   |
+| Exp 5 | `exp5_rigid_vacate.yaml`  | Hard-constraint vacate  | Hard MILP + fixed ZigBee superframe  |
+| Exp 6 | `exp6_overhead_free.yaml` | Overhead-free variant   | Soft MILP + L-WSA; no sensing window |
+
+Exp 6 also changes CTC from bidirectional to WiFi-to-ZigBee.
 
 ### Parameter sweep
 
@@ -256,7 +258,7 @@ The metrics module computes airtime, delay, jitter, and drops after the run. It 
 
 1. Under heavy load, CoWiC-MAC achieves $G_z \ge 90\%$.
 2. CoWiC-MAC keeps $PDR_w = 0$ by deadline-aware postponement.
-3. Exp 5 compares hard WiFi vacate with a fixed ZigBee superframe. Exp 6 compares the full protocol without a sensing window.
+3. Exp 5 changes the WiFi policy and ZigBee superframe. Exp 6 removes sensing and uses one-way WiFi-to-ZigBee CTC.
 
 ---
 

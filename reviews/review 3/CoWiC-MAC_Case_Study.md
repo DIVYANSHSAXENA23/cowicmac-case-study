@@ -186,7 +186,9 @@ This abstraction is enough for MAC-layer coordination studies. It is not a PHY f
 | Exp 3 | `exp3_ecc.yaml`           | NAV-style ECC             | Fixed ZigBee superframe              |
 | Exp 4 | `exp4_cowic_full.yaml`    | Full CoWiC-MAC            | Soft MILP + L-WSA + sensing window   |
 | Exp 5 | `exp5_rigid_vacate.yaml`  | Hard WiFi vacate ablation | Hard MILP + fixed ZigBee superframe  |
-| Exp 6 | `exp6_overhead_free.yaml` | Sensing-overhead ablation | Soft MILP + L-WSA, no sensing window |
+| Exp 6 | `exp6_overhead_free.yaml` | Overhead-free variant     | Soft MILP + L-WSA; no sensing window |
+
+Exp 6 also changes CTC from bidirectional to WiFi-to-ZigBee.
 
 Parameter sweep dimensions:
 
@@ -206,11 +208,11 @@ Acceptance criterion: Exp 4 at $D_{\text{free}} = 31$ ms and $T_{ZB} = 1000$ ms 
 
 Hypothesis mapping:
 
-| Hypothesis | Claim                           | Simulation support                                                        |
-| ---------- | ------------------------------- | ------------------------------------------------------------------------- |
-| H1         | $G_z \ge 90\%$ under heavy load | Exp 4 with MILP + L-WSA                                                   |
-| H2         | $PDR_w = 0$                     | Deadline-aware MILP postponement                                          |
-| H3         | Compare variant configurations  | Exp 5 changes the scheduler and ZigBee superframe. Exp 6 removes sensing. |
+| Hypothesis | Claim                           | Simulation support                                                                             |
+| ---------- | ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| H1         | $G_z \ge 90\%$ under heavy load | Exp 4 with MILP + L-WSA                                                                        |
+| H2         | $PDR_w = 0$                     | Deadline-aware MILP postponement                                                               |
+| H3         | Compare variant configurations  | Exp 5 changes the scheduler and ZigBee superframe. Exp 6 removes sensing and uses one-way CTC. |
 
 Observed quick-sweep acceptance point (Exp 4, Traffic I, $D_{\text{free}}=31$ ms, $T_{ZB}=1000$ ms):
 
