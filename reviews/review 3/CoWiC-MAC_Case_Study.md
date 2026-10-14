@@ -20,13 +20,13 @@ This review documents the software-only CoWiC-MAC simulation built for the case 
 
 Stack:
 
-| Layer                 | Choice                        |
-| --------------------- | ----------------------------- |
-| Language              | Python 3.11+                  |
-| Discrete-event engine | SimPy                         |
-| MILP                  | PuLP + CBC (`pulp < 3.0.0`)   |
-| Tests                 | pytest                        |
-| Lint / types          | ruff, mypy                    |
+| Layer                 | Choice                      |
+| --------------------- | --------------------------- |
+| Language              | Python 3.11+                |
+| Discrete-event engine | SimPy                       |
+| MILP                  | PuLP + CBC (`pulp < 3.0.0`) |
+| Tests                 | pytest                      |
+| Lint / types          | ruff, mypy                  |
 
 Verification status at document time:
 
@@ -53,11 +53,11 @@ Implemented modules:
 
 Presentation ownership matches Review 2.
 
-| Contributor     | Presentation domain  | Main implementation focus                                                            |
-| --------------- | -------------------- | ------------------------------------------------------------------------------------ |
-| Upayan Mazumder | Central architecture | Simulation engine, CTC, channel medium, MILP scheduler, L-WSA, plotter, integration |
+| Contributor     | Presentation domain  | Main implementation focus                                                                                                   |
+| --------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Upayan Mazumder | Central architecture | Simulation engine, CTC, channel medium, MILP scheduler, L-WSA, plotter, integration                                         |
 | Nitesh Pandey   | WiFi side            | Trace generator, AP orchestrator, baselines, fallback, hard-constraint MILP (Exp 5), engine fixes, metrics, benchmark sweep |
-| Divyansh Saxena | ZigBee side          | ZigBee architecture review, superframe / L-WSA specification input, test design      |
+| Divyansh Saxena | ZigBee side          | ZigBee architecture review, superframe / L-WSA specification input, test design                                             |
 
 ---
 
@@ -190,13 +190,13 @@ This abstraction is enough for MAC-layer coordination studies. It is not a PHY f
 
 Parameter sweep dimensions:
 
-| Parameter            | Values              |
-| -------------------- | ------------------- |
-| $D_{\text{free}}$    | 31, 62, 93, 123 ms  |
-| $T_{ZB}$             | 1000, 2000, 5000 ms |
+| Parameter            | Values                                              |
+| -------------------- | --------------------------------------------------- |
+| $D_{\text{free}}$    | 31, 62, 93, 123 ms                                  |
+| $T_{ZB}$             | 1000, 2000, 5000 ms                                 |
 | Traffic              | Traffic I and III by default; I–IV with `--traffic` |
-| $D_{\text{sensing}}$ | 10, 20, 50, 100 ms  |
-| Seeds                | 5                   |
+| $D_{\text{sensing}}$ | 10, 20, 50, 100 ms                                  |
+| Seeds                | 5                                                   |
 
 Acceptance criterion: Exp 4 at $D_{\text{free}} = 31$ ms and $T_{ZB} = 1000$ ms must satisfy $G_z > 0.9$ and $PDR_w = 0$.
 
@@ -206,11 +206,11 @@ Acceptance criterion: Exp 4 at $D_{\text{free}} = 31$ ms and $T_{ZB} = 1000$ ms 
 
 Hypothesis mapping:
 
-| Hypothesis | Claim                                 | Simulation support               |
-| ---------- | ------------------------------------- | -------------------------------- |
-| H1         | $G_z \ge 90\%$ under heavy load       | Exp 4 with MILP + L-WSA          |
-| H2         | $PDR_w = 0$                           | Deadline-aware MILP postponement |
-| H3         | Bi-directional adaptation is required | Exp 5 (no L-WSA), Exp 6 (no sensing window) |
+| Hypothesis | Claim                           | Simulation support                                                        |
+| ---------- | ------------------------------- | ------------------------------------------------------------------------- |
+| H1         | $G_z \ge 90\%$ under heavy load | Exp 4 with MILP + L-WSA                                                   |
+| H2         | $PDR_w = 0$                     | Deadline-aware MILP postponement                                          |
+| H3         | Compare variant configurations  | Exp 5 changes the scheduler and ZigBee superframe. Exp 6 removes sensing. |
 
 Observed quick-sweep acceptance point (Exp 4, Traffic I, $D_{\text{free}}=31$ ms, $T_{ZB}=1000$ ms):
 

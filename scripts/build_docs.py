@@ -40,7 +40,20 @@ DOCUMENTS: tuple[tuple[str, str], ...] = (
     ),
 )
 
-DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+DEFAULT_CHROME = next(
+    (
+        path
+        for name in (
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "chrome.exe",
+        )
+        if (path := shutil.which(name)) is not None
+    ),
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+)
 
 FENCE = re.compile(r"^```(mermaid|math)[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
 
@@ -80,10 +93,11 @@ def render_mermaid(
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         diagram = tmp_dir / "diagram.mmd"
-        diagram.write_text(source)
+        diagram.write_text(source, encoding="utf-8")
         config = tmp_dir / "puppeteer.json"
         config.write_text(
-            json.dumps({"executablePath": chrome, "args": ["--no-sandbox"]})
+            json.dumps({"executablePath": chrome, "args": ["--no-sandbox"]}),
+            encoding="utf-8",
         )
         _run(
             [
@@ -127,12 +141,16 @@ def build_pdf(
     source: Path, output: Path, mmdc: Sequence[str], chrome: str, pandoc: str
 ) -> Path:
     """Build one PDF from one Markdown file."""
-    with tempfile.TemporaryDirectory() as tmp:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent) as tmp:
         work = Path(tmp)
         prepared = work / "doc.md"
-        prepared.write_text(prepare_markdown(source.read_text(), work, mmdc, chrome))
+        prepared.write_text(
+            prepare_markdown(source.read_text(encoding="utf-8"), work, mmdc, chrome),
+            encoding="utf-8",
+        )
         css = work / "style.css"
-        css.write_text(CSS)
+        css.write_text(CSS, encoding="utf-8")
         html = work / "doc.html"
         _run(
             [
@@ -153,19 +171,25 @@ def build_pdf(
             ],
             cwd=work,
         )
-        output.parent.mkdir(parents=True, exist_ok=True)
+        generated = work / "output.pdf"
         _run(
             [
                 chrome,
                 "--headless=new",
                 "--disable-gpu",
+                "--no-sandbox",
                 "--no-pdf-header-footer",
-                f"--print-to-pdf={output}",
+                f"--user-data-dir={work / 'chrome-profile'}",
+                f"--print-to-pdf={generated}",
                 html.as_uri(),
             ]
         )
-    if not output.exists() or output.stat().st_size == 0:
-        raise BuildError(f"Chrome did not write {output}")
+        if not generated.is_file() or generated.stat().st_size == 0:
+            raise BuildError(f"Chrome did not write {generated}")
+        with generated.open("rb") as pdf:
+            if pdf.read(5) != b"%PDF-":
+                raise BuildError(f"Chrome wrote an invalid PDF: {generated}")
+        generated.replace(output)
     return output
 
 
@@ -186,7 +210,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mmdc",
         default="mmdc",
-        help="Mermaid CLI command (default: mmdc on PATH).",
+        help="Mermaid CLI executable (default: mmdc on PATH).",
     )
     parser.add_argument("--chrome", default=DEFAULT_CHROME, help="Chrome binary.")
     parser.add_argument("--pandoc", default="pandoc", help="pandoc binary.")
@@ -196,8 +220,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """Build every document in DOCUMENTS."""
     args = parse_args(argv)
-    mmdc = args.mmdc.split()
-    for tool in (mmdc[0], args.pandoc, args.chrome):
+    mmdc = [args.mmdc]
+    for tool in (*mmdc, args.pandoc, args.chrome):
         if shutil.which(tool) is None and not Path(tool).exists():
             print(f"Missing tool: {tool}", file=sys.stderr)
             return 1

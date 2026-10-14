@@ -29,39 +29,10 @@ The system has three domains: the WiFi domain, the ZigBee domain, and the shared
 
 ```mermaid
 flowchart TB
-  subgraph WiFi["WiFi Domain"]
-    AP[AP Orchestrator]
-    MILP[MILP Scheduler]
-    FG[Frame Groups]
-    AP --> MILP
-    MILP --> FG
-  end
-
-  subgraph CTC["CTC Link"]
-    WB[WBeacon]
-    ZB[ZBeacon]
-  end
-
-  subgraph ZigBee["ZigBee Domain"]
-    ZC[ZigBee Coordinator]
-    LWSA[L-WSA Adapter]
-    SF[Superframe Config]
-    ZC --> LWSA
-    LWSA --> SF
-  end
-
-  subgraph Medium["Shared 2.4 GHz Medium"]
-    CH[Channel Medium]
-  end
-
-  ZC -->|ZBeacon demand| ZB
-  ZB --> AP
-  AP -->|WBeacon free window| WB
-  WB --> ZC
-  FG --> CH
-  SF --> CH
-  MET[Metrics Calculator]
-  CH -->|records after the run| MET
+  AP["WiFi AP<br/>MILP scheduler"] <-->|CTC| ZC["ZigBee Coordinator<br/>L-WSA"]
+  AP --> CH["Shared 2.4 GHz channel"]
+  ZC --> CH
+  CH --> MET["Metrics calculator"]
 ```
 
 ### End-to-end coordination cycle
@@ -147,11 +118,11 @@ States:
 
 ### 3.4 Baseline Experiments (Exp 1-3)
 
-| Exp   | Name          | Behaviour                                          |
-| ----- | ------------- | -------------------------------------------------- |
+| Exp   | Name          | Behaviour                                                                                                    |
+| ----- | ------------- | ------------------------------------------------------------------------------------------------------------ |
 | Exp 1 | Uncoordinated | No CTC. No rescheduling. ZigBee uses a fixed superframe at the cycle start. Carrier sensing is not modelled. |
-| Exp 2 | Opportunistic | AP senses natural idle gaps. No WiFi rescheduling. |
-| Exp 3 | ECC           | NAV-based reservation. Fixed ZigBee superframe.    |
+| Exp 2 | Opportunistic | AP senses natural idle gaps. No WiFi rescheduling.                                                           |
+| Exp 3 | ECC           | NAV-based reservation. Fixed ZigBee superframe.                                                              |
 
 ---
 
@@ -259,13 +230,13 @@ The metrics module computes airtime, delay, jitter, and drops after the run. It 
 
 ### Parameter sweep
 
-| Parameter            | Values              |
-| -------------------- | ------------------- |
-| $D_{\text{free}}$    | 31, 62, 93, 123 ms  |
-| $T_{ZB}$             | 1000, 2000, 5000 ms |
+| Parameter            | Values                                              |
+| -------------------- | --------------------------------------------------- |
+| $D_{\text{free}}$    | 31, 62, 93, 123 ms                                  |
+| $T_{ZB}$             | 1000, 2000, 5000 ms                                 |
 | Traffic profiles     | Traffic I and III by default; I–IV with `--traffic` |
-| $D_{\text{sensing}}$ | 10, 20, 50, 100 ms  |
-| Seeds                | 5 per point         |
+| $D_{\text{sensing}}$ | 10, 20, 50, 100 ms                                  |
+| Seeds                | 5 per point                                         |
 
 **Acceptance criterion (Issue #11):** Exp 4 at $D_{\text{free}} = 31$ ms and $T_{ZB} = 1000$ ms must achieve $G_z > 0.9$ and $PDR_w = 0$.
 
@@ -273,33 +244,33 @@ The metrics module computes airtime, delay, jitter, and drops after the run. It 
 
 ## 8. Key Metrics
 
-| Metric           | Definition                                                     |
-| ---------------- | -------------------------------------------------------------- |
-| $G_z$            | ZigBee delivered payload / theoretical clean-spectrum capacity |
-| $PDR_w$          | Discarded WiFi FG duration / total requested WiFi duration     |
+| Metric           | Definition                                                      |
+| ---------------- | --------------------------------------------------------------- |
+| $G_z$            | ZigBee delivered payload / theoretical clean-spectrum capacity  |
+| $PDR_w$          | Discarded WiFi FG duration / total requested WiFi duration      |
 | $U_{\text{eff}}$ | Successful WiFi + ZigBee + control airtime / simulated duration |
-| Jitter           | Variation of WiFi FG delay                                     |
-| Max delay        | Largest WiFi FG delay in the run                               |
+| Jitter           | Variation of WiFi FG delay                                      |
+| Max delay        | Largest WiFi FG delay in the run                                |
 
 ### Hypotheses under test
 
 1. Under heavy load, CoWiC-MAC achieves $G_z \ge 90\%$.
 2. CoWiC-MAC keeps $PDR_w = 0$ by deadline-aware postponement.
-3. The ablations show which parts are necessary under fragmented whitespace. Exp 5 removes L-WSA (fixed superframe with hard WiFi vacate). Exp 6 removes the sensing window.
+3. Exp 5 compares hard WiFi vacate with a fixed ZigBee superframe. Exp 6 compares the full protocol without a sensing window.
 
 ---
 
 ## 9. Software Stack
 
-| Layer        | Choice                        |
-| ------------ | ----------------------------- |
-| Language     | Python 3.11+                  |
-| DES engine   | SimPy                         |
-| MILP         | PuLP + CBC (`pulp < 3.0.0`)   |
-| Data         | NumPy, Pandas, PyYAML         |
-| Plots        | Matplotlib                    |
-| Tests        | pytest (245 tests)            |
-| Lint / types | ruff, mypy                    |
+| Layer        | Choice                      |
+| ------------ | --------------------------- |
+| Language     | Python 3.11+                |
+| DES engine   | SimPy                       |
+| MILP         | PuLP + CBC (`pulp < 3.0.0`) |
+| Data         | NumPy, Pandas, PyYAML       |
+| Plots        | Matplotlib                  |
+| Tests        | pytest (245 tests)          |
+| Lint / types | ruff, mypy                  |
 
 ---
 
