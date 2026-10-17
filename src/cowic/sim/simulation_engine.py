@@ -264,11 +264,16 @@ def _residual_wifi_fragments(
     return fragments
 
 
-def _fixed_superframe(
-    anchor_ms: float, window_end_ms: float, pending_packets: int
-) -> SuperframeConfig:
-    """A legacy structure truncated to the available window and queue."""
-    if window_end_ms <= anchor_ms or pending_packets <= 0:
+def _fixed_superframe(anchor_ms: float, window_end_ms: float) -> SuperframeConfig:
+    """A legacy structure truncated to the available window.
+
+    Fills the standard 8 CAP + 7 CFP structure (``_FIXED_CAP_SLOTS``,
+    ``_FIXED_CFP_SLOTS``) as far as it fits before ``window_end_ms``; it
+    does not throttle to a queue estimate (see ``_pending_packets``'s
+    docstring: that estimate sizes the *reported* ZBeacon demand, not how
+    much of a granted window gets used).
+    """
+    if window_end_ms <= anchor_ms:
         return SuperframeConfig(
             slot_duration_ms=_FIXED_SLOT_DURATION_MS,
             cap_slots=0,
@@ -281,18 +286,8 @@ def _fixed_superframe(
         math.floor((window_end_ms - anchor_ms) / _FIXED_SLOT_DURATION_MS + 1e-12) - 1,
     )
     max_data_slots = min(max_data_slots, _FIXED_CAP_SLOTS + _FIXED_CFP_SLOTS)
-    packet_duration_ms = _packet_duration_ms(_FIXED_SLOT_DURATION_MS, 2.0)
-    min_interval_ms = _min_cap_interval_ms(packet_duration_ms)
-    cap_attempts_per_slot = max(
-        1, math.floor(_FIXED_SLOT_DURATION_MS / min_interval_ms)
-    )
-    requested_cap_slots = math.ceil(pending_packets / cap_attempts_per_slot)
-    cap_slots = min(_FIXED_CAP_SLOTS, max_data_slots, requested_cap_slots)
-    cap_attempts = math.floor(
-        cap_slots * _FIXED_SLOT_DURATION_MS / min_interval_ms + 1e-12
-    )
-    remaining = max(0, pending_packets - cap_attempts)
-    cfp_slots = min(_FIXED_CFP_SLOTS, max_data_slots - cap_slots, remaining)
+    cap_slots = min(_FIXED_CAP_SLOTS, max_data_slots)
+    cfp_slots = min(_FIXED_CFP_SLOTS, max_data_slots - cap_slots)
     active_slots = cap_slots + cfp_slots
     return SuperframeConfig(
         slot_duration_ms=_FIXED_SLOT_DURATION_MS,
@@ -733,6 +728,11 @@ class SimulationEngine:
                     outcome.schedule.t_free_start_ms,
                     outcome.schedule.t_free_end_ms,
                 )
+                # With Eq. 3/13's windows now disjoint (milp_scheduler.py),
+                # this clamp is empty by construction except at the exact
+                # touching boundary; kept so a future relaxation of that
+                # constraint degrades gracefully instead of silently losing
+                # the sensing-window exclusion.
                 sense_start = max(
                     outcome.schedule.t_sense_start_ms,
                     outcome.schedule.t_free_start_ms,
@@ -755,15 +755,12 @@ class SimulationEngine:
                 fixed_start_ms, fixed_end_ms = _fixed_window(
                     config, outcome, cycle.start_ms, cycle.end_ms
                 )
-                superframe = _fixed_superframe(
-                    fixed_start_ms, fixed_end_ms, pending_packets
-                )
+                superframe = _fixed_superframe(fixed_start_ms, fixed_end_ms)
 
             for packet in _synthesize_zigbee_packets(
                 superframe,
                 cycle.index,
                 zc.lwsa.desired_packet_duration_ms,
-                pending_packets,
             ):
                 if packet.start_time_ms >= horizon_ms:
                     continue

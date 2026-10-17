@@ -192,6 +192,10 @@ class MILPScheduler:
             (a.fg_id, b.fg_id): pulp.LpVariable(f"b_{a.fg_id}_{b.fg_id}", cat="Binary")
             for a, b in combinations(frame_groups, 2)
         }
+        # Selects which window comes first when neither overlaps WiFi
+        # (Eq. 3/13): b_ws=0 -> free window ends before sensing starts;
+        # b_ws=1 -> sensing window ends before free starts.
+        b_ws = pulp.LpVariable("b_ws", cat="Binary")
 
         t_free_start = pulp.LpVariable(
             "T_free_start", lowBound=t_start_ms, upBound=t_end_ms
@@ -214,11 +218,15 @@ class MILPScheduler:
             + pulp.lpSum(mu[fg.fg_id] * p[fg.fg_id] for fg in frame_groups)
         )
 
-        # The sensing reservation begins at the start of the ZigBee grant.
-        # Its overlap with the grant is control airtime unavailable to data.
+        # Window timing constraints (Eq. 3/13): the free and sensing
+        # windows must lie within the horizon and remain non-overlapping.
+        # The ZBeacon is transmitted inside the announced sensing window
+        # (Section 3.1), which is a separate reservation from the ZigBee
+        # data window, not a sub-interval carved out of it.
         prob += t_free_end <= t_end_ms
         prob += t_sense_end <= t_end_ms
-        prob += t_sense_start == t_free_start
+        prob += t_free_end <= t_sense_start + big_m * (1 - b_ws)
+        prob += t_sense_end <= t_free_start + big_m * b_ws
 
         for fg in frame_groups:
             fid = fg.fg_id
@@ -394,9 +402,9 @@ class MILPScheduler:
         """Window placement when there are no Frame Groups to schedule."""
         t_free_start = t_start_ms
         t_free_end = t_free_start + d_free_ms
-        t_sense_start = t_free_start
+        t_sense_start = t_free_end
         t_sense_end = t_sense_start + d_sensing_ms
-        status = "Optimal" if max(t_free_end, t_sense_end) <= t_end_ms else "Infeasible"
+        status = "Optimal" if t_sense_end <= t_end_ms else "Infeasible"
         return ScheduleResult(
             decisions=[],
             t_free_start_ms=t_free_start,

@@ -58,8 +58,8 @@ def test_schedule_rejects_negative_window_durations() -> None:
         raise AssertionError("expected ConfigurationError for negative d_free_ms")
 
 
-def test_schedule_empty_frame_groups_places_sensing_inside_grant() -> None:
-    """The sensing reservation starts with the grant and consumes its airtime."""
+def test_schedule_empty_frame_groups_places_windows_at_start() -> None:
+    """With no FGs, the free window is placed first, then the sensing window."""
     scheduler = MILPScheduler()
     result = scheduler.schedule(
         [], d_free_ms=30.0, d_sensing_ms=10.0, t_start_ms=0.0, t_end_ms=100.0
@@ -67,8 +67,8 @@ def test_schedule_empty_frame_groups_places_sensing_inside_grant() -> None:
     assert result.decisions == []
     assert result.t_free_start_ms == 0.0
     assert result.t_free_end_ms == 30.0
-    assert result.t_sense_start_ms == 0.0
-    assert result.t_sense_end_ms == 10.0
+    assert result.t_sense_start_ms == 30.0
+    assert result.t_sense_end_ms == 40.0
     assert result.solver_status == "Optimal"
 
 
