@@ -681,3 +681,30 @@ def test_zigbee_synthesis_uses_t_min_and_packet_airtime() -> None:
 
     limited = _synthesize_zigbee_packets(config, 1, 2.0, pending_packets=3)
     assert sum(not packet.is_beacon for packet in limited) == 3
+
+
+def test_beacon2_does_not_overlap_first_cfp_packet_without_cap() -> None:
+    """With cap_slots == 0, Beacon2 and the first GTS packet share a slot
+    start; the packet must follow the beacon instead of colliding with it."""
+    from cowic.models.superframe import SuperframeConfig
+
+    for slot_ms in (0.96, 3.84):
+        config = SuperframeConfig(
+            slot_duration_ms=slot_ms,
+            cap_slots=0,
+            cfp_slots=3,
+            beacon_offset_ms=0.0,
+            beacon_interval_ms=4 * slot_ms,
+            beacon2_offset_ms=slot_ms,
+        )
+        packets = _synthesize_zigbee_packets(config, 0, 2.0)
+        intervals = sorted(
+            (p.start_time_ms, p.start_time_ms + p.duration_ms) for p in packets
+        )
+        for (_, end), (start, _) in zip(intervals, intervals[1:], strict=False):
+            assert end <= start + 1e-9
+        cfp = [p for p in packets if p.is_cfp]
+        assert all(
+            p.start_time_ms + p.duration_ms <= slot_ms * (2 + k) + 1e-9
+            for k, p in enumerate(cfp)
+        )

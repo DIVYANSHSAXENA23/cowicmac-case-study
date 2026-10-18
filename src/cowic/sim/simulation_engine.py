@@ -409,6 +409,15 @@ def _synthesize_zigbee_packets(
         if remaining_packets <= 0:
             break
         slot_start_ms = cfp_start_ms + j * superframe.slot_duration_ms
+        if (
+            j == 0
+            and superframe.cap_slots == 0
+            and superframe.beacon2_offset_ms is not None
+        ):
+            # With no CAP, Beacon2 opens the first GTS slot. The GTS packet
+            # follows it; t_pk leaves at least t_ta + t_ack (0.544 ms) of
+            # slot free, which covers the 0.48 ms beacon.
+            slot_start_ms += beacon_duration_ms
         packets.append(
             ZigBeePacket(
                 packet_id=cycle_index * 1000 + len(packets),
