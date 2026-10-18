@@ -38,7 +38,7 @@ flowchart TB
 ### End-to-end coordination cycle
 
 1. The ZC reports demand with a ZBeacon (`d_free_ms`).
-2. The AP solves the MILP and creates a free window with an overlapping sensing reservation at its start.
+2. The AP solves the MILP and places a free window and a separate sensing window. The two windows do not overlap (Eq. 3).
 3. The AP sends a WBeacon with window bounds.
 4. The ZC runs L-WSA and builds a superframe that fits the free window.
 5. Both sides transmit on the shared medium.
@@ -176,7 +176,7 @@ Search variables:
 | $i$ (CAP slots)     | $i + j \le 15$                                                        |
 | $t_{\text{offset}}$ | Window start, or end of each residual WiFi fragment inside the window |
 
-Filter: $(1 + i + j) \cdot t_{\text{SfSlot}} \le$ free-window duration. Each candidate slot must avoid residual WiFi fragments $\mathcal{T}^{\text{WiFi}}$. CAP attempts are counted at $t_{\min}$ stride. The protected sensing interval overlaps the beginning of the grant and is unavailable to ZigBee data.
+Filter: $(1 + i + j) \cdot t_{\text{SfSlot}} \le$ free-window duration. Each candidate slot must avoid residual WiFi fragments $\mathcal{T}^{\text{WiFi}}$. CAP attempts are counted at $t_{\min}$ stride.
 
 ### 4.3 ZigBee Coordinator State Machine
 
@@ -275,7 +275,7 @@ Exp 6 also changes CTC from bidirectional to WiFi-to-ZigBee.
 | MILP         | PuLP + HiGHS (`highspy`)    |
 | Data         | NumPy, Pandas, PyYAML       |
 | Plots        | Matplotlib                  |
-| Tests        | pytest (260 tests)          |
+| Tests        | pytest (263 tests)          |
 | Lint / types | ruff, mypy                  |
 
 ---

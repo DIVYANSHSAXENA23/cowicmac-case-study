@@ -30,7 +30,7 @@ Stack:
 
 Verification status at document time:
 
-- 260 automated tests passing
+- 263 automated tests passing
 - CI green on Python 3.11 and 3.12
 - Clean `mypy` and `ruff` checks
 
