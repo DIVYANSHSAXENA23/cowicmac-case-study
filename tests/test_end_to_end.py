@@ -95,13 +95,41 @@ def test_simulation_engine_uncoordinated_baseline_harms_zigbee(
         d_free_ms=62.0,
         d_sensing_ms=0.0,
         zigbee_period_ms=1000.0,
-        wifi_scheduling="milp_soft_constraint",
+        wifi_scheduling="none",
         ctc_direction="none",
         zigbee_adaptation="fixed",
     )
     result = SimulationEngine(config).run()
+    coordinated = SimulationEngine(_exp4_config(short_trace)).run()
     assert result["zigbee_transmissions"] > 0
+    assert coordinated["zigbee_transmissions"] > 0
     assert result["zigbee_success_rate"] < 0.5
+    assert result["zigbee_success_rate"] < coordinated["zigbee_success_rate"]
+
+
+def test_exp3_ecc_reserves_window_without_sensing_window(short_trace: Path) -> None:
+    """ECC is bidirectional but has no sensing window, so no ZBeacon can be
+    sent. The AP must still make its blind D_free reservation (capped by
+    the 40 ms NAV) instead of a zero window every cycle."""
+    config = SimulationConfig(
+        scenario_name="Test_Exp3",
+        duration_s=3.0,
+        wifi_trace_path=short_trace,
+        d_free_ms=62.0,
+        d_sensing_ms=0.0,
+        zigbee_period_ms=1000.0,
+        wifi_scheduling="ecc_nav",
+        ctc_direction="bidirectional",
+        zigbee_adaptation="fixed",
+    )
+    engine = SimulationEngine(config)
+    engine.run()
+    assert engine.last_demand_history == [config.d_free_ms] * 3
+    assert engine.last_medium is not None
+    assert any(
+        record.protocol == "zigbee" and record.success
+        for record in engine.last_medium.transmissions
+    )
 
 
 @pytest.mark.parametrize(

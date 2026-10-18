@@ -158,6 +158,22 @@ def test_lost_wbeacon_restores_original_wifi_schedule() -> None:
     ]
 
 
+def test_lost_wbeacon_restore_does_not_overlap_carryover() -> None:
+    """Carryover deferred by an earlier coordinated cycle is still on air
+    until 30 ms. Restoring the original timing must not stack FG 1 (10 ms)
+    or FG 2 (35 ms) on top of it or on top of each other."""
+    carried = FrameGroup(9, 0.0, 30.0, 500.0, 0.0, False)
+    fgs = [
+        FrameGroup(1, 10.0, 10.0, 500.0, 10.0, False),
+        FrameGroup(2, 35.0, 10.0, 500.0, 35.0, False),
+    ]
+    ap = APOrchestrator(FakeCTC(delivers=False), FakeScheduler())
+    outcome = ap.process_cycle(fgs, 0.0, 100.0, _zbeacon(), [carried])
+    starts = {d.fg_id: d.scheduled_start_ms for d in outcome.schedule.decisions}
+    assert starts == {1: 30.0, 2: 40.0}
+    assert all(not d.is_postponed for d in outcome.schedule.decisions)
+
+
 def test_uncoordinated_cycle_skips_ctc_states_and_wbeacon() -> None:
     ctc = FakeCTC()
     ap = APOrchestrator(ctc, FakeScheduler())

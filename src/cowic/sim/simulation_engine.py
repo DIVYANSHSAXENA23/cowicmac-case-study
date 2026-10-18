@@ -558,8 +558,14 @@ class SimulationEngine:
             scheduler=scheduler,
             d_sensing_ms=config.d_sensing_ms,
             optimal_statuses=optimal_statuses,
+            # Without a ZBeacon channel (Exp 1/2/5/6), or a sensing window
+            # to carry one (Exp 3, ECC: "blind" reservation without ZigBee's
+            # actual demand, Section 1), the AP reserves the configured
+            # D_free. Otherwise it learns the demand from each ZBeacon.
             default_demand_ms=(
-                config.d_free_ms if config.ctc_direction != "bidirectional" else 0.0
+                config.d_free_ms
+                if config.ctc_direction != "bidirectional" or config.d_sensing_ms == 0.0
+                else 0.0
             ),
         )
         lwsa = LWSAAdapter()

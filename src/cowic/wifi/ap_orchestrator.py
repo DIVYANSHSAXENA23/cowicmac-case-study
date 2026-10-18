@@ -217,7 +217,7 @@ class APOrchestrator:
             delivered = self.ctc.transmit(wbeacon)
             if not delivered:
                 schedule = _restore_original_schedule(
-                    schedule, frame_groups, t_start_ms, t_end_ms
+                    schedule, frame_groups, busy_until, t_start_ms, t_end_ms
                 )
 
         self._advance(APState.TRANSMITTING)
@@ -337,20 +337,42 @@ def _carryover_busy(
 def _restore_original_schedule(
     schedule: ScheduleResult,
     frame_groups: Sequence[FrameGroup],
+    busy_until_ms: float,
     t_start_ms: float,
     t_end_ms: float,
 ) -> ScheduleResult:
-    """Undo coordinated WiFi placements when the WBeacon is not delivered."""
-    frame_groups_by_id = {fg.fg_id: fg for fg in frame_groups}
-    decisions = [
-        SchedulingDecision(
-            fg_id=decision.fg_id,
-            scheduled_start_ms=frame_groups_by_id[decision.fg_id].original_start_ms,
-            is_postponed=False,
-            delay_ms=0.0,
+    """Undo coordinated WiFi placements when the WBeacon is not delivered.
+
+    Each FG goes back to its original start, but never earlier than the
+    channel is free: carryover (an FG deferred by an earlier, coordinated
+    cycle) can still be on air until ``busy_until_ms``, and an FG pushed
+    back by it pushes later FGs in turn. An FG may still run past the
+    cycle end, as uncoordinated WiFi does; one pushed to start at or after
+    the cycle end is postponed, as in ``_carryover_busy``.
+    """
+    decisions = []
+    cursor = busy_until_ms
+    for fg in sorted(frame_groups, key=lambda f: f.original_start_ms):
+        start = max(fg.original_start_ms, cursor)
+        if start >= t_end_ms:
+            decisions.append(
+                SchedulingDecision(
+                    fg_id=fg.fg_id,
+                    scheduled_start_ms=t_end_ms,
+                    is_postponed=True,
+                    delay_ms=t_end_ms - fg.original_start_ms,
+                )
+            )
+            continue
+        decisions.append(
+            SchedulingDecision(
+                fg_id=fg.fg_id,
+                scheduled_start_ms=start,
+                is_postponed=False,
+                delay_ms=start - fg.original_start_ms,
+            )
         )
-        for decision in schedule.decisions
-    ]
+        cursor = start + fg.duration_ms
     return replace(
         schedule,
         decisions=decisions,
